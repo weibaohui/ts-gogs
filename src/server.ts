@@ -161,6 +161,25 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     pathname = '/';
   }
 
+  // internal: /-/api/sanitize_ipynb (bluemonday-style ipynb HTML sanitizer)
+  if (pathname === '/-/api/sanitize_ipynb' && req.method === 'POST') {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const { sanitizeHTML } = await import('./markup.js');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end(sanitizeHTML(Buffer.concat(chunks).toString('utf8')));
+    return;
+  }
+
+  // internal: /-/metrics (prometheus text format)
+  if (pathname === '/-/metrics' && req.method === 'GET') {
+    const { renderMetrics } = await import('./metrics.js');
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.end(renderMetrics());
+    return;
+  }
+
   // healthcheck
   if (pathname === '/healthcheck' && (req.method === 'GET' || req.method === 'HEAD')) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -226,6 +245,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
     res.statusCode = 404;
     res.end();
+    return;
+  }
+
+  // captcha image (flamego/captcha equivalent)
+  if (pathname.startsWith('/captcha/')) {
+    const { newCaptcha } = await import('./toolx.js');
+    const { id, svg } = newCaptcha();
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Set-Cookie', `gogs_captcha=${id}; Path=${conf.subpath || '/'}; HttpOnly`);
+    res.end(svg);
     return;
   }
 

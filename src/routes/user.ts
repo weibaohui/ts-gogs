@@ -359,7 +359,9 @@ export async function DeleteSSHKey(c: Context): Promise<void> {
 
 export async function SettingsSecurity(c: Context): Promise<void> {
   await settingsBase(c, 'settings.security');
-  c.Data['Owner'] = c.User;
+  c.Data['PageIsSettingsSecurity'] = true;
+  const twofactor = await import('../twofactor.js');
+  c.Data['TwoFactor'] = twofactor.getTwoFactorByUserID(c.UserID());
   c.Success('user/settings/security');
 }
 
@@ -488,10 +490,117 @@ export async function SettingsDeletePost(c: Context): Promise<void> {
   c.Redirect(conf.subpath + '/');
 }
 
+/**
+ * GET/POST /user/activate_email — verify an activation code and mark the
+ * secondary email active (gogs ActivateEmail). Works without login.
+ */
 export async function ActivateEmail(c: Context): Promise<void> {
-  c.NotFound();
+  const code = c.Query('code');
+  const { verifyUserFromCode } = await import('../toolx.js');
+  const parsed = verifyUserFromCode(code, (u: string) => db.getUserByUsername(u));
+  if (!parsed || !parsed.valid) {
+    c.flash.Error(c.Tr('auth.invalid_code'));
+    c.RedirectSubpath('/');
+    return;
+  }
+  // mark the matching email_address activated
+  const row = db.getEmailAddress(parsed.user.email);
+  if (row && !(row as any).is_activated) {
+    db.db().prepare('UPDATE email_address SET is_activated = 1 WHERE id = ?').run((row as any).id);
+  }
+  c.flash.Success(c.Tr('settings.add_email_success'));
+  c.RedirectSubpath('/user/settings/email');
 }
 
+/** GET /user/email2user — auto sign-in via verified email activation code. */
 export async function Email2User(c: Context): Promise<void> {
-  c.NotFound();
+  const code = c.Query('code');
+  const { verifyUserFromCode } = await import('../toolx.js');
+  const parsed = verifyUserFromCode(code, (u: string) => db.getUserByUsername(u));
+  if (!parsed || !parsed.valid) {
+    c.flash.Error(c.Tr('auth.invalid_or_used_code'));
+    c.RedirectSubpath('/');
+    return;
+  }
+  const { completeSignIn } = await import('../context.js');
+  completeSignIn(c, parsed.user);
+  c.RedirectSubpath('/');
+}
+
+// ---------------------------------------------------------------- two-factor security
+
+export async function SettingsTwoFactorEnable(c: Context): Promise<void> {
+  const twofactor = await import('../twofactor.js');
+  if (twofactor.isTwoFactorEnabled(c.UserID())) {
+    c.NotFound();
+    return;
+  }
+  c.Data['Title'] = c.Tr('settings.two_factor_enable_title');
+  c.Data['PageIsSettingsSecurity'] = true;
+
+  let secret = c.session.Get('twoFactorSecret');
+  let url = c.session.Get('twoFactorURL');
+  if (!secret || !url) {
+    const gen = twofactor.totpGenerate(conf.brandName, c.User!.email);
+    secret = gen.secret;
+    url = gen.url;
+  }
+  c.Data['TwoFactorSecret'] = secret;
+  const QRCode = (await import('qrcode')).default;
+  c.Data['QRCode'] = await QRCode.toDataURL(url, { width: 240 });
+  c.session.Set('twoFactorSecret', secret);
+  c.session.Set('twoFactorURL', url);
+  c.session.Release();
+  c.Success('user/settings/two_factor_enable');
+}
+
+export async function SettingsTwoFactorEnablePost(c: Context): Promise<void> {
+  const twofactor = await import('../twofactor.js');
+  const secret = c.session.Get('twoFactorSecret');
+  if (!secret) {
+    c.NotFound();
+    return;
+  }
+  const passcode = c.Query('passcode') || String((await c.form()).passcode ?? '');
+  if (!twofactor.totpValidate(passcode, String(secret))) {
+    c.flash.Error(c.Tr('settings.two_factor_invalid_passcode'));
+    c.RedirectSubpath('/user/settings/security/two_factor_enable');
+    return;
+  }
+  twofactor.createTwoFactor(c.UserID(), String(secret));
+  c.session.Delete('twoFactorSecret');
+  c.session.Delete('twoFactorURL');
+  c.session.Release();
+  c.flash.Success(c.Tr('settings.two_factor_enable_success'));
+  c.RedirectSubpath('/user/settings/security/two_factor_recovery_codes');
+}
+
+export async function SettingsTwoFactorRecoveryCodes(c: Context): Promise<void> {
+  const twofactor = await import('../twofactor.js');
+  if (!twofactor.isTwoFactorEnabled(c.UserID())) {
+    c.NotFound();
+    return;
+  }
+  c.Data['Title'] = c.Tr('settings.two_factor_recovery_codes_title');
+  c.Data['PageIsSettingsSecurity'] = true;
+  c.Data['RecoveryCodes'] = twofactor.listRecoveryCodes(c.UserID());
+  c.Success('user/settings/two_factor_recovery_codes');
+}
+
+export async function SettingsTwoFactorRecoveryCodesPost(c: Context): Promise<void> {
+  const twofactor = await import('../twofactor.js');
+  if (!twofactor.isTwoFactorEnabled(c.UserID())) {
+    c.NotFound();
+    return;
+  }
+  twofactor.regenerateRecoveryCodes(c.UserID());
+  c.flash.Success(c.Tr('settings.two_factor_regenerate_recovery_codes_success'));
+  c.RedirectSubpath('/user/settings/security/two_factor_recovery_codes');
+}
+
+export async function SettingsTwoFactorDisable(c: Context): Promise<void> {
+  const twofactor = await import('../twofactor.js');
+  twofactor.deleteTwoFactor(c.UserID());
+  c.flash.Success(c.Tr('settings.two_factor_disable_success'));
+  c.RedirectSubpath('/user/settings/security');
 }

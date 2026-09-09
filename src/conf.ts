@@ -153,6 +153,17 @@ export class Conf {
   i18nLangs: string[] = [];
   i18nNames: string[] = [];
 
+  // [mailer]
+  emailEnabled = false;
+  emailHost = '';
+  emailPort = 587;
+  emailFrom = '';
+  emailUser = '';
+  emailPasswd = '';
+  emailSkipVerify = false;
+  emailUseTLS = true;
+  emailSubjectPrefix = '[Gogs] ';
+
   // [other]
   showFooterBranding = false;
   showFooterTemplateLoadTime = true;
@@ -320,6 +331,16 @@ export class Conf {
     const names = this.get('i18n', 'NAMES');
     this.i18nLangs = langs ? langs.split(',').map((s) => s.trim()) : [];
     this.i18nNames = names ? names.split(',').map((s) => s.trim()) : [];
+
+    this.emailEnabled = toBool(this.get('mailer', 'ENABLED'), false);
+    this.emailHost = this.get('mailer', 'HOST') ?? '';
+    this.emailPort = toInt(this.get('mailer', 'PORT'), 587);
+    this.emailFrom = this.get('mailer', 'FROM') ?? '';
+    this.emailUser = this.get('mailer', 'USER') ?? '';
+    this.emailPasswd = this.get('mailer', 'PASSWD') ?? '';
+    this.emailSkipVerify = toBool(this.get('mailer', 'SKIP_VERIFY'), false);
+    this.emailUseTLS = toBool(this.get('mailer', 'USE_TLS'), true);
+    this.emailSubjectPrefix = this.get('mailer', 'SUBJECT_PREFIX') ?? '[Gogs] ';
 
     this.showFooterBranding = toBool(this.get('other', 'SHOW_FOOTER_BRANDING'), false);
     this.showFooterTemplateLoadTime = toBool(this.get('other', 'SHOW_FOOTER_TEMPLATE_LOAD_TIME'), true);

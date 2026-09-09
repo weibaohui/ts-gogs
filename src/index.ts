@@ -47,6 +47,17 @@ async function main(): Promise<void> {
   console.log(`Database:       ${conf.dbPath}`);
 
   const server = await startServer();
+
+  // periodic mirror synchronization (gogs InitSyncMirrors)
+  const { startMirrorLoop } = await import('./mirror.js');
+  startMirrorLoop();
+
+  // builtin SSH server (gogs START_SSH_SERVER)
+  if (conf.startSSHServer) {
+    const { startSSHServer } = await import('./sshx/server.js');
+    startSSHServer();
+  }
+
   console.log(`Available on    ${conf.externalURL}`);
   console.log(`Listening       ${conf.httpAddr}:${conf.httpPort}`);
 

@@ -182,6 +182,8 @@ function allowedDataImage(src: string): boolean {
 
 /** bluemonday UGCPolicy-equivalent whitelist sanitizer. */
 export function sanitizeHTML(html: string): string {
+  // remove script/style blocks entirely (tags + content), like bluemonday
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '');
   let out = '';
   let i = 0;
   const stack: string[] = [];

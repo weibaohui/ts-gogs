@@ -93,6 +93,18 @@ export async function commitRepoAction(doer: db.User, repo: db.Repository, refNa
   deliverHooks(repo, 'push', pushPayload(doer, repo, refName, commits));
 }
 
+export async function mirrorSyncPushAction(doer: db.User, repo: db.Repository, refName: string, commits: PushCommits): Promise<void> {
+  const shortRef = refName.replace('refs/heads/', '');
+  newAction({
+    opType: ActionType.MIRROR_SYNC_PUSH,
+    doer,
+    repo,
+    refName: shortRef,
+    content: JSON.stringify(commits),
+  });
+  deliverHooks(repo, 'push', pushPayload(doer, repo, refName, commits));
+}
+
 export async function pushTagAction(doer: db.User, repo: db.Repository, tagName: string): Promise<void> {
   newAction({ opType: ActionType.PUSH_TAG, doer, repo, refName: tagName });
   deliverHooks(repo, 'create', {

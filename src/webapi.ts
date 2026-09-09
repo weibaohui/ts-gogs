@@ -59,6 +59,15 @@ export async function handleWebAPI(c: Context, subPath: string): Promise<boolean
         c.JSON(403, errBody(c.Tr('auth.disable_register_prompt')));
         return true;
       }
+      if (conf.enableRegistrationCaptcha) {
+        const { validateCaptcha } = await import('./toolx.js');
+        const captchaID = c.GetCookie('gogs_captcha');
+        if (!validateCaptcha(captchaID, String(req.captcha ?? ''))) {
+          const msg = c.Tr('form.captcha_incorrect');
+          c.JSON(401, errBody(undefined, { captcha: msg }));
+          return true;
+        }
+      }
       if (!userName || !isAlphaDashDot(userName) || userName.length > 35) {
         c.JSON(400, errBody(undefined, { userName: c.Tr('form.username') + c.Tr('form.alpha_dash_dot_error') }));
         return true;
@@ -115,10 +124,94 @@ export async function handleWebAPI(c: Context, subPath: string): Promise<boolean
         c.JSON(401, errBody(c.Tr('form.username_password_incorrect'), { username: null, password: null }));
         return true;
       }
+      const twofactor = await import('./twofactor.js');
+      if (twofactor.isTwoFactorEnabled(user.id)) {
+        c.session.Set('mfaUserID', user.id);
+        c.session.Release();
+        c.JSONSuccess({ mfa: true });
+        return true;
+      }
       completeSignIn(c, user);
       c.JSONSuccess({});
       return true;
     }
+  }
+
+  if (subPath === '/user/mfa') {
+    if (method === 'GET') {
+      const uid = c.session.Get('mfaUserID');
+      if (!uid) {
+        c.Status(404);
+        c.res.end();
+        c.rendered = true;
+        return true;
+      }
+      c.Status(204);
+      c.res.end();
+      c.rendered = true;
+      return true;
+    }
+    if (method === 'POST') {
+      const uid = c.session.Get('mfaUserID');
+      if (!uid) {
+        c.JSON(401, errBody(c.Tr('auth.mfa_session_expired')));
+        return true;
+      }
+      const req = await c.form();
+      const passcode = String(req.passcode ?? '');
+      const twofactor = await import('./twofactor.js');
+      if (!/^[0-9]{6}$/.test(passcode)) {
+        const msg = c.Tr('auth.mfa_invalid_passcode');
+        c.JSON(401, errBody(undefined, { passcode: msg }));
+        return true;
+      }
+      if (!twofactor.validateTOTP(uid, passcode)) {
+        const msg = c.Tr('auth.mfa_invalid_passcode');
+        c.JSON(401, errBody(undefined, { passcode: msg }));
+        return true;
+      }
+      if (twofactor.passcodeRecentlyUsed(uid, passcode)) {
+        const msg = c.Tr('auth.mfa_reused_passcode');
+        c.JSON(401, errBody(undefined, { passcode: msg }));
+        return true;
+      }
+      twofactor.markPasscodeUsed(uid, passcode);
+      const u = db.getUserByID(uid);
+      if (!u) {
+        c.Status(500);
+        c.res.end();
+        c.rendered = true;
+        return true;
+      }
+      completeSignIn(c, u);
+      c.JSONSuccess({});
+      return true;
+    }
+  }
+
+  if (subPath === '/user/mfa/recovery' && method === 'POST') {
+    const uid = c.session.Get('mfaUserID');
+    if (!uid) {
+      c.JSON(401, errBody(c.Tr('auth.mfa_session_expired')));
+      return true;
+    }
+    const req = await c.form();
+    const twofactor = await import('./twofactor.js');
+    if (!twofactor.useRecoveryCode(uid, String(req.recoveryCode ?? ''))) {
+      const msg = c.Tr('auth.mfa_invalid_recovery_code');
+      c.JSON(401, errBody(undefined, { recoveryCode: msg }));
+      return true;
+    }
+    const u = db.getUserByID(uid);
+    if (!u) {
+      c.Status(500);
+      c.res.end();
+      c.rendered = true;
+      return true;
+    }
+    completeSignIn(c, u);
+    c.JSONSuccess({});
+    return true;
   }
 
   if (subPath === '/user/sign-out' && method === 'POST') {
@@ -131,11 +224,68 @@ export async function handleWebAPI(c: Context, subPath: string): Promise<boolean
 
   if (subPath === '/user/reset-password') {
     if (method === 'GET') {
-      c.JSONSuccess({ emailEnabled: false, valid: false });
+      const code = c.Query('code');
+      let valid = false;
+      if (code) {
+        const { verifyUserFromCode } = await import('./toolx.js');
+        const parsed = verifyUserFromCode(code, (u: string) => db.getUserByUsername(u));
+        valid = !!parsed?.valid;
+      }
+      c.JSONSuccess({ emailEnabled: conf.emailEnabled, valid });
       return true;
     }
-    // POST without email service configured → forbidden like gogs
-    c.JSON(403, errBody(c.Tr('auth.disable_register_mail')));
+    if (method === 'POST') {
+      if (!conf.emailEnabled) {
+        c.JSON(403, errBody(c.Tr('auth.disable_register_mail')));
+        return true;
+      }
+      const req = await c.form();
+      const email = String(req.email ?? '').toLowerCase().trim();
+      const user = db.getUserByEmail(email);
+      if (!user) {
+        c.JSONSuccess({ hours: Math.floor(conf.activateCodeLives / 60) });
+        return true;
+      }
+      if (user.type !== 0) {
+        const msg = c.Tr('auth.non_local_account');
+        c.JSON(403, errBody(undefined, { email: msg }));
+        return true;
+      }
+      try {
+        const { createActivateCode } = await import('./toolx.js');
+        const { sendResetPasswordMail } = await import('./mailer.js');
+        const code = createActivateCode(user, conf.resetPwdCodeLives) + Buffer.from(user.name).toString('hex');
+        await sendResetPasswordMail(user, code);
+        c.JSONSuccess({ hours: Math.floor(conf.resetPwdCodeLives / 60) });
+      } catch (e: any) {
+        console.error('[mailer] reset mail:', e?.message ?? e);
+        c.JSONSuccess({ hours: Math.floor(conf.resetPwdCodeLives / 60) });
+      }
+      return true;
+    }
+  }
+
+  if (subPath === '/user/reset-password/complete' && method === 'POST') {
+    const req = await c.form();
+    const code = String(req.code ?? '');
+    const { verifyUserFromCode } = await import('./toolx.js');
+    const parsed = verifyUserFromCode(code, (u: string) => db.getUserByUsername(u));
+    if (!parsed || !parsed.valid) {
+      c.JSON(400, errBody(c.Tr('auth.invalid_code')));
+      return true;
+    }
+    const password = String(req.password ?? '');
+    if (password.length < 6) {
+      const msg = c.Tr('auth.password_too_short');
+      c.JSON(400, errBody(undefined, { password: msg }));
+      return true;
+    }
+    const { encodePassword, randomSalt } = await import('./authx/password.js');
+    const salt = randomSalt();
+    db.updateUserColumns(parsed.user.id, { passwd: encodePassword(password, salt), salt });
+    c.Status(204);
+    c.res.end();
+    c.rendered = true;
     return true;
   }
 
@@ -146,7 +296,47 @@ export async function handleWebAPI(c: Context, subPath: string): Promise<boolean
       c.rendered = true;
       return true;
     }
+    if (method === 'POST') {
+      if (!conf.requireEmailConfirmation) {
+        c.JSON(403, errBody(c.Tr('auth.disable_register_mail')));
+        return true;
+      }
+      if (!conf.emailEnabled) {
+        c.JSON(403, errBody(c.Tr('auth.disable_register_mail')));
+        return true;
+      }
+      try {
+        const { createActivateCode } = await import('./toolx.js');
+        const { sendActivateMail } = await import('./mailer.js');
+        const code = createActivateCode(c.User, conf.activateCodeLives) + Buffer.from(c.User.name).toString('hex');
+        await sendActivateMail(c.User, code);
+        c.JSONSuccess({ codeLifetimeHours: Math.floor(conf.activateCodeLives / 60) });
+      } catch (e: any) {
+        console.error('[mailer] activate mail:', e?.message ?? e);
+        c.JSON(500, errBody(String(e?.message ?? e)));
+      }
+      return true;
+    }
     c.JSONSuccess({ email: c.User.email, codeLifetimeHours: Math.floor(conf.activateCodeLives / 60) });
+    return true;
+  }
+
+  if (subPath === '/user/activate/complete' && method === 'POST') {
+    const req = await c.form();
+    const code = String(req.code ?? '');
+    const { verifyUserFromCode } = await import('./toolx.js');
+    const parsed = verifyUserFromCode(code, (u: string) => db.getUserByUsername(u));
+    if (!parsed || !parsed.valid) {
+      c.JSON(400, errBody(c.Tr('auth.invalid_code')));
+      return true;
+    }
+    const { randomSalt } = await import('./authx/password.js');
+    const salt = randomSalt();
+    db.updateUserColumns(parsed.user.id, { is_active: 1, rands: salt });
+    completeSignIn(c, parsed.user);
+    c.Status(204);
+    c.res.end();
+    c.rendered = true;
     return true;
   }
 

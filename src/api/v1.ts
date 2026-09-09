@@ -2029,10 +2029,35 @@ function registerRepoSubRoutes(
     ctx.c.Status(202);
     ctx.c.res.end();
     ctx.c.rendered = true;
+    // immediate sync in background (gogs MirrorQueue)
+    setImmediate(async () => {
+      try {
+        const { syncMirror } = await import('../mirror.js');
+        await syncMirror(ctx.repo.Repository!.id, ctx.UserID());
+      } catch (e) {
+        console.error('[mirror-sync]', e);
+      }
+    });
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/editorconfig/:filename', repoGroupNoToken(async (ctx: APIContext) => {
-    ctx.notFound(); // editorconfig support not ported in this build
+  m.get('/api/v1/repos/:username/:reponame/editorconfig/:filename', reqTokenWrap(async (ctx: APIContext) => {
+    const ok = await repoAssignment(ctx, ctx.c.Params(':username'), ctx.c.Params(':reponame'));
+    if (!ok) return;
+    const repo = ctx.repo.Repository!;
+    const repoDir = repo.RepoPath();
+    const ref = repo.default_branch || conf.defaultBranch;
+    const { repoEditorconfig, getDefinitionForFilename } = await import('../editorconfig.js');
+    const ec = await repoEditorconfig(repoDir, ref);
+    if (!ec) {
+      ctx.notFound();
+      return;
+    }
+    const def = getDefinitionForFilename(ec, ctx.c.Params(':filename'));
+    if (!def) {
+      ctx.notFound();
+      return;
+    }
+    ctx.c.JSONSuccess(def);
   }));
 }
 

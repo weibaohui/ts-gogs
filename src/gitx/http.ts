@@ -44,6 +44,30 @@ export function handleGitHTTP(req: http.IncomingMessage, res: http.ServerRespons
 
   const action = rest.split('?')[0];
 
+  // Git LFS: /info/lfs/...
+  const lfsMatch = /^info\/lfs(\/.*)?$/.exec(action);
+  if (lfsMatch) {
+    (async () => {
+      try {
+        const owner = db.getUserByUsername(username);
+        const repo = owner ? db.getRepoByOwnerAndName(owner, repoName) : null;
+        const fsMod = await import('node:fs');
+        if (!owner || !repo || !fsMod.existsSync(isWiki ? repo.WikiPath() : repo.RepoPath())) {
+          res.statusCode = 404;
+          res.end('repository does not exist');
+          return;
+        }
+        const { handleLFS } = await import('../lfsx.js');
+        await handleLFS(req, res, owner, repo, lfsMatch[1] ?? '/');
+      } catch (e: any) {
+        console.error('[lfs]', e);
+        if (!res.headersSent) res.statusCode = 500;
+        res.end();
+      }
+    })();
+    return true;
+  }
+
   const GIT_ACTIONS = new Set([
     'info/refs', 'HEAD', 'git-upload-pack', 'git-receive-pack',
     'objects/info/alternates', 'objects/info/http-alternates', 'objects/info/packs',

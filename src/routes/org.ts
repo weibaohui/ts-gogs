@@ -3,6 +3,7 @@ import type { Context } from '../context.js';
 import { conf } from '../conf.js';
 import * as db from '../db/db.js';
 import { newPaginater } from './home.js';
+import { nowUnix } from '../db/db.js';
 
 export async function Create(c: Context): Promise<void> {
   if (!c.User!.CanCreateOrganization()) {
@@ -394,4 +395,146 @@ export async function WebhooksEdit(c: Context): Promise<void> {
   c.Data['Hook'] = { ...hook, eventsObj: JSON.parse(hook.events ?? '{}') };
   c.Data['Org'] = org;
   c.Success('repo/settings/webhook/gogs');
+}
+
+// ---------------------------------------------------------------- org webhooks
+
+function requireOrg(c: Context): db.User | null {
+  const org = db.getUserByUsername(c.Params(':org'));
+  if (!org || org.type !== 1) return null;
+  if (!db.isOrgOwner(c.UserID(), org.id)) return null;
+  return org;
+}
+
+export async function OrgWebhooksNew(c: Context): Promise<void> {
+  const org = requireOrg(c);
+  if (!org) {
+    c.NotFound();
+    return;
+  }
+  c.Data['PageIsSettingsHooks'] = true;
+  c.Data['PageIsSettingsHooksNew'] = true;
+  c.Data['HookType'] = c.Params(':type');
+  c.Data['Org'] = org;
+  c.Success('repo/settings/webhook/new');
+}
+
+function orgHookBase(c: Context, form: Record<string, any>, hookType: number, meta: string): void {
+  const org = requireOrg(c);
+  if (!org) {
+    c.NotFound();
+    return;
+  }
+  const eventsObj: any = { push_only: false, send_everything: false, choose_events: false, events: {} };
+  if (String(form.push_only ?? '') === 'on') eventsObj.push_only = true;
+  if (String(form.send_everything ?? '') === 'on') eventsObj.send_everything = true;
+  if (String(form.choose_events ?? '') === 'on') {
+    eventsObj.choose_events = true;
+    for (const ev of ['create', 'delete', 'fork', 'push', 'issues', 'issue_comment', 'pull_request', 'release']) {
+      eventsObj.events[ev] = String(form[`event_${ev}`] ?? '') === 'on';
+    }
+  }
+  const now = nowUnix();
+  db.db()
+    .prepare(
+      `INSERT INTO webhook (repo_id, org_id, url, content_type, secret, events, is_ssl, is_active, hook_task_type, meta, last_status, created_unix, updated_unix)
+       VALUES (0,?,?,?,?,?,0,?,?,?,0,?,?)`
+    )
+    .run(
+      org.id,
+      String(form.payload_url ?? ''),
+      String(form.content_type ?? 'json') === 'form' ? 2 : 1,
+      String(form.secret ?? ''),
+      JSON.stringify(eventsObj),
+      String(form.active ?? '') === 'on' ? 1 : 0,
+      hookType,
+      meta,
+      now,
+      now
+    );
+  c.flash.Success(c.Tr('repo.settings.add_hook_success'));
+  c.Redirect(conf.subpath + `/org/${org.name}/settings/hooks`);
+}
+
+export async function OrgWebhooksNewPost(c: Context): Promise<void> {
+  const form = await c.form();
+  orgHookBase(c, form, 1, '{}');
+}
+
+export async function OrgWebhooksSlackNewPost(c: Context): Promise<void> {
+  const form = await c.form();
+  orgHookBase(c, form, 2, JSON.stringify({
+    channel: String(form.channel ?? ''), username: String(form.username ?? ''),
+    icon_url: String(form.icon_url ?? ''), color: String(form.color ?? 'good'),
+  }));
+}
+
+export async function OrgWebhooksDiscordNewPost(c: Context): Promise<void> {
+  const form = await c.form();
+  orgHookBase(c, form, 3, JSON.stringify({ username: String(form.username ?? '') }));
+}
+
+export async function OrgWebhooksDingtalkNewPost(c: Context): Promise<void> {
+  const form = await c.form();
+  orgHookBase(c, form, 4, '{}');
+}
+
+export async function OrgWebhooksList(c: Context): Promise<void> {
+  const org = db.getUserByUsername(c.Params(':org'));
+  if (!org || org.type !== 1) {
+    c.NotFound();
+    return;
+  }
+  c.Data['Org'] = org;
+  c.Data['PageIsSettingsHooks'] = true;
+  c.Data['Hooks'] = (db.db().prepare('SELECT * FROM webhook WHERE org_id = ? ORDER BY id DESC').all(org.id) as any[]).map((h) => db.goAlias({ ...h }));
+  c.Success('repo/settings/webhook/list');
+}
+
+export async function OrgWebhooksEdit(c: Context): Promise<void> {
+  const org = db.getUserByUsername(c.Params(':org'));
+  const hook = org ? (db.db().prepare('SELECT * FROM webhook WHERE id = ? AND org_id = ?').get(c.ParamsInt64(':id'), org.id) as any) : null;
+  if (!org || !hook) {
+    c.NotFound();
+    return;
+  }
+  c.Data['Org'] = org;
+  c.Data['PageIsSettingsHooks'] = true;
+  c.Data['PageIsSettingsHooksEdit'] = true;
+  c.Data['Hook'] = { ...db.goAlias(hook), eventsObj: JSON.parse(hook.events ?? '{}') };
+  c.Success('repo/settings/webhook/' + (hook.hook_task_type === 2 ? 'slack' : 'gogs'));
+}
+
+export async function OrgWebhooksEditPost(c: Context): Promise<void> {
+  const org = db.getUserByUsername(c.Params(':org'));
+  const hook = org ? (db.db().prepare('SELECT * FROM webhook WHERE id = ? AND org_id = ?').get(c.ParamsInt64(':id'), org.id) as any) : null;
+  if (!org || !hook) {
+    c.NotFound();
+    return;
+  }
+  const form = await c.form();
+  const eventsObj: any = { push_only: false, send_everything: false, choose_events: false, events: {} };
+  if (String(form.push_only ?? '') === 'on') eventsObj.push_only = true;
+  if (String(form.send_everything ?? '') === 'on') eventsObj.send_everything = true;
+  if (String(form.choose_events ?? '') === 'on') {
+    eventsObj.choose_events = true;
+    for (const ev of ['create', 'delete', 'fork', 'push', 'issues', 'issue_comment', 'pull_request', 'release']) {
+      eventsObj.events[ev] = String(form[`event_${ev}`] ?? '') === 'on';
+    }
+  }
+  db.db()
+    .prepare('UPDATE webhook SET url = ?, secret = ?, events = ?, is_active = ?, updated_unix = ? WHERE id = ?')
+    .run(String(form.payload_url ?? ''), String(form.secret ?? ''), JSON.stringify(eventsObj), String(form.active ?? '') === 'on' ? 1 : 0, nowUnix(), hook.id);
+  c.flash.Success(c.Tr('repo.settings.update_hook_success'));
+  c.Redirect(conf.subpath + `/org/${org.name}/settings/hooks`);
+}
+
+export async function OrgDeleteWebhook(c: Context): Promise<void> {
+  const org = db.getUserByUsername(c.Params(':org'));
+  const hook = org ? (db.db().prepare('SELECT id FROM webhook WHERE id = ? AND org_id = ?').get(Number((await c.form()).id ?? 0), org.id) as any) : null;
+  if (org && hook) {
+    db.db().prepare('DELETE FROM webhook WHERE id = ?').run(hook.id);
+    c.flash.Success(c.Tr('repo.settings.webhook_deletion_success'));
+  }
+  c.Redirect(conf.subpath + `/org/${org?.name ?? ''}/settings/hooks`);
 }

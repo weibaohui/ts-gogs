@@ -160,7 +160,23 @@ export async function Config(c: Context): Promise<void> {
 }
 
 export async function SendTestMail(c: Context): Promise<void> {
-  c.flash.Error(c.Tr('admin.config.email_not_enabled'));
+  if (!conf.emailEnabled) {
+    c.flash.Error(c.Tr('admin.config.email_not_enabled'));
+    c.Redirect(conf.subpath + '/admin/config');
+    return;
+  }
+  try {
+    const { sendMail } = await import('../mailer.js');
+    await sendMail({
+      from: conf.emailFrom,
+      to: c.User!.email,
+      subject: 'Gogs Test Email!',
+      body: '<p>This is a test email sent by Gogs.</p>',
+    });
+    c.flash.Success(c.Tr('admin.config.email_test_success', c.User!.email));
+  } catch (e: any) {
+    c.flash.Error(c.Tr('admin.config.email_test_failed') + ': ' + String(e?.message ?? e));
+  }
   c.Redirect(conf.subpath + '/admin/config');
 }
 

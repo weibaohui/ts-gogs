@@ -153,6 +153,10 @@ export class Conf {
   i18nLangs: string[] = [];
   i18nNames: string[] = [];
 
+  // [prometheus]
+  prometheusEnabled = false;
+  prometheusEnableBasicAuth = false;
+
   // [mailer]
   emailEnabled = false;
   emailHost = '';
@@ -331,6 +335,9 @@ export class Conf {
     const names = this.get('i18n', 'NAMES');
     this.i18nLangs = langs ? langs.split(',').map((s) => s.trim()) : [];
     this.i18nNames = names ? names.split(',').map((s) => s.trim()) : [];
+
+    this.prometheusEnabled = toBool(this.get('prometheus', 'ENABLED'), false);
+    this.prometheusEnableBasicAuth = toBool(this.get('prometheus', 'ENABLE_BASIC_AUTH'), false);
 
     this.emailEnabled = toBool(this.get('mailer', 'ENABLED'), false);
     this.emailHost = this.get('mailer', 'HOST') ?? '';

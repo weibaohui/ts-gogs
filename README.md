@@ -53,8 +53,10 @@ node dist/index.js
   always `read_only: true`.
 - Only SQLite is supported by this port (gogs defaults are accepted in app.ini but other
   drivers fail fast).
-- SSH git push is not implemented (smart HTTP and the web editor are); `START_SSH_SERVER`
-  is accepted but inert. Delegate hooks are written for future use.
+- SSH pushes work through the builtin SSH server (`START_SSH_SERVER = true`, port from
+  `SSH_PORT`); the `authorized_keys`-based mode is not implemented.
+- LDAP/PAM login sources can be managed under `/admin/auths` but authenticating against
+  them is not implemented in this build (local/Plain accounts always work).
 
 ## Layout
 

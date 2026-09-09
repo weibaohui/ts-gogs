@@ -172,8 +172,21 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // internal: /-/metrics (prometheus text format)
+  // internal: /-/metrics (prometheus text format; gated by [prometheus] ENABLED)
   if (pathname === '/-/metrics' && req.method === 'GET') {
+    if (!conf.prometheusEnabled) {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+    if (conf.prometheusEnableBasicAuth) {
+      const expected = 'Basic ' + Buffer.from('gogsmetrics:gogsplant').toString('base64');
+      if (req.headers.authorization !== expected) {
+        res.statusCode = 401;
+        res.end();
+        return;
+      }
+    }
     const { renderMetrics } = await import('./metrics.js');
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.end(renderMetrics());
@@ -292,6 +305,36 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     res.setHeader('Location', conf.subpath + '/img/avatar_default.png');
     res.end();
     return;
+  }
+
+  // go-get meta (gogs ServeGoGet): quick response regardless of repo existence
+  if (url.searchParams.get('go-get') === '1') {
+    const m = /^\/([^/]+)\/([^/]+)$/.exec(pathname);
+    if (m) {
+      const [, ownerName, repoName] = m;
+      let branchName = 'master';
+      const owner = (await import('./db/db.js')).getUserByUsername(ownerName);
+      const repo = owner ? (await import('./db/db.js')).getRepoByOwnerAndName(owner, repoName) : null;
+      if (repo && repo.default_branch) branchName = repo.default_branch;
+      const prefix = conf.externalURL + [ownerName, repoName, 'src', branchName].join('/');
+      const goGetImport = conf.url.host + (conf.subpath || '') + '/' + ownerName + '/' + repoName;
+      const cloneLink = conf.externalURL + path.posix.join(ownerName, repoName) + '.git';
+      const insecureFlag = conf.externalURL.startsWith('https://') ? '' : '--insecure ';
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.statusCode = 200;
+      res.end(`<!doctype html>
+<html>
+\t<head>
+\t\t<meta name="go-import" content="${goGetImport} git ${cloneLink}">
+\t\t<meta name="go-source" content="${goGetImport} _ ${prefix}{/dir} ${prefix}{/dir}/{file}#L{line}">
+\t</head>
+\t<body>
+\t\tgo get ${insecureFlag}${goGetImport}
+\t</body>
+</html>
+`);
+      return;
+    }
   }
 
   // route table

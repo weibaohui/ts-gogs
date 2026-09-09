@@ -88,7 +88,31 @@ export async function Operation(c: Context): Promise<void> {
   if (op === 'delete_repo_activities') {
     db.db().prepare('DELETE FROM action WHERE id > 0').run();
     c.flash.Success(c.Tr('admin.dashboard.delete_repo_activities_success'));
-  } else if (op === 'sync_repo_statistics' || op === 'update_mirror') {
+  } else if (op === 'update_mirror') {
+    setImmediate(async () => {
+      try {
+        const mirrors = db.db().prepare('SELECT repo_id FROM mirror').all() as any[];
+        const { syncMirror } = await import('../mirror.js');
+        for (const m of mirrors) {
+          try {
+            const repo = db.getRepoByID(m.repo_id);
+            if (repo) await syncMirror(m.repo_id, repo.owner_id);
+          } catch (e) {
+            console.error('[admin update_mirror]', e);
+          }
+        }
+      } catch (e) {
+        console.error('[admin update_mirror]', e);
+      }
+    });
+    c.flash.Success(c.Tr('admin.dashboard.operation_success'));
+  } else if (op === 'sync_repo_statistics') {
+    // refresh issue/pull counters for every repository
+    const ids = db.db().prepare('SELECT id FROM repository').all() as any[];
+    for (const { id } of ids) {
+      db.refreshIssueCounts(id);
+      db.refreshMilestoneCounts(id);
+    }
     c.flash.Success(c.Tr('admin.dashboard.operation_success'));
   }
   c.Redirect(conf.subpath + '/admin');

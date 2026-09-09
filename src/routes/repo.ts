@@ -791,7 +791,7 @@ export async function Pulls(c: Context): Promise<void> {
     ClosedCount: (db.db().prepare('SELECT COUNT(*) AS c FROM issue WHERE repo_id = ? AND is_closed = 1 AND is_pull = 1').get(repo.id) as any).c,
   };
   c.Data['Page'] = newPaginater(total, conf.issuePagingNum, page, 5);
-  c.Success('repo/pulls');
+  c.Success('repo/issue/list');
 }
 
 export async function NewIssue(c: Context): Promise<void> {
@@ -1468,6 +1468,28 @@ async function writeWikiPage(repo: db.Repository, title: string, content: string
 
 // ---------------------------------------------------------------- pulls
 
+/** gogs testPatch: apply the PR patch onto a fresh base-branch copy to judge mergeability. */
+async function testPullRequestMergeable(repo: db.Repository, pr: any): Promise<number> {
+  const patchFile = path.join(conf.appDataPath, 'patches', String(repo.id), `${pr.index}.patch`);
+  if (!fs.existsSync(patchFile)) return pr.status ?? 0;
+  const tmpDir = path.join(conf.appDataPath, 'tmp', 'prtest-' + Date.now());
+  fs.mkdirSync(tmpDir, { recursive: true });
+  try {
+    const baseDir = repo.RepoPath();
+    await git.git(process.cwd(), 'clone', '-q', '-b', pr.base_branch, baseDir, tmpDir);
+    const wsFlag = repo.pulls_ignore_whitespace ? '--ignore-whitespace' : null;
+    const args = ['apply', '--check'];
+    if (wsFlag) args.push(wsFlag);
+    args.push(patchFile);
+    const r = await git.gitOK(tmpDir, ...args);
+    return r !== null ? 2 : 0; // 2=mergeable 0=conflict
+  } catch {
+    return 0;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export async function CompareAndPullRequest(c: Context): Promise<void> {
   const wildcard = c.Params(':*');
   const parts = wildcard.split('...');
@@ -1548,12 +1570,17 @@ export async function CompareAndPullRequestPost(c: Context): Promise<void> {
   fs.mkdirSync(patchDir, { recursive: true });
   fs.writeFileSync(path.join(patchDir, `${index}.patch`), patch);
 
+  // provisional row so testPullRequestMergeable can locate the patch
+  let status = 1; // checking
+  const probe = { index, base_branch: baseBranch };
+  status = await testPullRequestMergeable(repo, probe);
+
   db.db()
     .prepare(
       `INSERT INTO pull_request (type, status, issue_id, "index", head_repo_id, base_repo_id, head_user_name, head_branch, base_branch, merge_base)
-       VALUES (0, 2, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(issueID, index, headRepo?.id ?? repo.id, repo.id, headUser, headBranch, baseBranch, mergeBase);
+    .run(status, issueID, index, headRepo?.id ?? repo.id, repo.id, headUser, headBranch, baseBranch, mergeBase);
 
   db.refreshIssueCounts(repo.id);
   const issue = db.getIssueByID(issueID)!;
@@ -2250,4 +2277,63 @@ export async function TestWebhook(c: Context): Promise<void> {
 
 export async function RedeliveryWebhook(c: Context): Promise<void> {
   c.Redirect(String(c.req.headers.referer ?? repoLink(c) + '/settings/hooks'));
+}
+
+// ---------------------------------------------------------------- git hooks settings
+
+const SERVER_SIDE_HOOKS = ['pre-receive', 'update', 'post-receive'];
+
+function hookFilePath(repo: db.Repository, name: string): string {
+  // gogs edits custom_hooks/<name>; the delegate hook lives in hooks/
+  return path.join(repo.RepoPath(), 'custom_hooks', name);
+}
+
+export async function SettingsGitHooks(c: Context): Promise<void> {
+  const repo = c.Repo.Repository!;
+  c.Data['Title'] = c.Tr('repo.settings.githooks');
+  c.Data['PageIsSettingsGitHooks'] = true;
+  const customDir = path.join(repo.RepoPath(), 'custom_hooks');
+  const hooks: any[] = [];
+  for (const name of SERVER_SIDE_HOOKS) {
+    const file = path.join(customDir, name);
+    hooks.push({
+      Name: name,
+      IsActive: fs.existsSync(file) && fs.statSync(file).size > 0,
+      IsManaged: false,
+    });
+  }
+  c.Data['Hooks'] = hooks;
+  c.Success('repo/settings/githooks');
+}
+
+export async function SettingsGitHooksEdit(c: Context): Promise<void> {
+  const name = c.Params(':name');
+  if (!SERVER_SIDE_HOOKS.includes(name)) {
+    c.NotFound();
+    return;
+  }
+  c.Data['Title'] = c.Tr('repo.settings.githooks');
+  c.Data['PageIsSettingsGitHooks'] = true;
+  c.Data['RequireSimpleMDE'] = true;
+  const file = hookFilePath(c.Repo.Repository!, name);
+  const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : `#!/usr/bin/env ${conf.scriptType}\n\n`;
+  c.Data['Hook'] = { Name: name, Content: content };
+  c.Data['Name'] = name;
+  c.Data['Content'] = content;
+  c.Data['Link'] = `${repoLink(c)}/settings/hooks/git/${name}`;
+  c.Success('repo/settings/githook_edit');
+}
+
+export async function SettingsGitHooksEditPost(c: Context): Promise<void> {
+  const name = c.Params(':name');
+  if (!SERVER_SIDE_HOOKS.includes(name)) {
+    c.NotFound();
+    return;
+  }
+  const file = hookFilePath(c.Repo.Repository!, name);
+  const form = await c.form();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(form.content ?? ''), { mode: 0o755 });
+  c.flash.Success(c.Tr('repo.settings.update_githook_success'));
+  c.Redirect(`${repoLink(c)}/settings/hooks/git/${name}`);
 }

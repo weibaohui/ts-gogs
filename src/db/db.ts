@@ -230,6 +230,8 @@ export class Repository {
   enable_wiki!: number;
   allow_public_wiki!: number;
   enable_pulls!: number;
+  pulls_ignore_whitespace!: number;
+  pulls_allow_rebase!: number;
   allow_public_issues!: number;
   enable_external_tracker!: number;
   external_tracker_url!: string;

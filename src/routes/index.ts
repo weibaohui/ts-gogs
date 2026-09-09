@@ -159,6 +159,9 @@ export function registerWebRoutes(m: Router): void {
   m.post('/:username/:reponame/settings/hooks/slack/new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksSlackNewPost);
   m.post('/:username/:reponame/settings/hooks/discord/new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksDiscordNewPost);
   m.post('/:username/:reponame/settings/hooks/dingtalk/new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksDingtalkNewPost);
+  m.get('/:username/:reponame/settings/hooks/git', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.SettingsGitHooks);
+  m.get('/:username/:reponame/settings/hooks/git/:name', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.SettingsGitHooksEdit);
+  m.post('/:username/:reponame/settings/hooks/git/:name', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.SettingsGitHooksEditPost);
   m.get('/:username/:reponame/settings/hooks/:id', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksEdit);
   m.post('/:username/:reponame/settings/hooks/gogs/:id', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksEditPost);
   m.post('/:username/:reponame/settings/hooks/slack/:id', reqSignIn, repo.RepoAssignment(), repo.RequireRepoAdmin(), repo.WebhooksSlackEditPost);

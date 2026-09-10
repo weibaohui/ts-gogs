@@ -149,7 +149,8 @@ export async function processPushUpdate(opts: {
 
   await git.updateServerInfo(repoDir);
   const { size } = await git.countObjects(repoDir);
-  db.updateRepoColumns(opts.repo.id, { size });
+  // upstream RepositoriesStore.Touch: any push clears the bare flag
+  db.updateRepoColumns(opts.repo.id, { size, is_bare: 0 });
 
   if (opts.refName.startsWith('refs/tags/')) {
     const tagName = opts.refName.slice('refs/tags/'.length);

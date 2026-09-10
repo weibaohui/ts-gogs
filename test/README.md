@@ -5,7 +5,7 @@
 | 套件 | 覆盖 | 用例数 |
 |---|---|---|
 | `api-test.mjs` | API v1 全部端点组：用户/仓库 CRUD、contents/raw/git 数据、协作者、部署密钥、标签、里程碑、工单(增删改查/标签/评论)、webhook CRUD、用户密钥/邮箱/关注、token、组织与团队、markdown、认证失败路径、删除清理 | 107 |
-| `git-test.mjs` | HTTP 智能协议（克隆/推拉/分支标签/二进制哈希往返/浅克隆/匿名与错密码拒绝/非快进拒绝+force）、SSH authorized_keys 模式、LFS batch API 上传下载、webhook 真实投递（本地监听收 push 事件） | 49 |
+| `git-test.mjs` | HTTP 智能协议（克隆/推拉/分支标签/二进制哈希往返/浅克隆/匿名与错密码拒绝/非快进拒绝+force）、**分支操作专项**（斜杠/点号命名分支、web 删分支、默认分支切换、跨分支建 PR 并合并、compare 页）、SSH authorized_keys 模式、LFS batch API 上传下载、webhook 真实投递（本地监听收 push 事件） | 69 |
 | `ui-test.mjs` | 真浏览器（系统 Chrome）：登录/注册（含验证码解码）、网页建仓、文件浏览、工单/评论/关闭、标签/里程碑、wiki、watch/star、explore、设置×9、管理后台×8、控制台零错误体检 | 54 |
 
 ## 运行

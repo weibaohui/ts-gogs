@@ -1265,14 +1265,23 @@ function registerRepoSubRoutes(
     const ok = await repoAssignment(ctx, ctx.c.Params(':username'), ctx.c.Params(':reponame'));
     if (!ok) return;
     const wildcard = ctx.c.Params(':*');
-    const slash = wildcard.indexOf('/');
-    if (slash < 0) {
+    // greedy ref resolution so slash-named branches work (upstream unescapes {ref})
+    const parts = wildcard.split('/');
+    const repoDir = ctx.repo.Repository!.RepoPath();
+    let ref = '';
+    let filePath = '';
+    for (let i = 1; i < parts.length; i++) {
+      const cand = parts.slice(0, i).join('/');
+      if (await git.resolveRef(repoDir, cand)) {
+        ref = cand;
+        filePath = parts.slice(i).join('/');
+        break;
+      }
+    }
+    if (!ref || !filePath) {
       ctx.notFound();
       return;
     }
-    const ref = wildcard.slice(0, slash);
-    const filePath = wildcard.slice(slash + 1);
-    const repoDir = ctx.repo.Repository!.RepoPath();
     const resolved = await git.resolveRef(repoDir, ref);
     if (!resolved) {
       ctx.notFound();

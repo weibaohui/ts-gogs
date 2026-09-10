@@ -236,6 +236,124 @@ async function main() {
   r = await git(['clone', sshCloneURL.replace(R + '.git', R2 + '.git'), `${dir}/ssh-denied`], { env: { ...gitEnv(), GIT_SSH_COMMAND: `ssh -i ${key2} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SSH_PORT}` } });
   check('SSH clone with unauthorized key rejected', !r.ok, r.stdout.slice(0, 200));
 
+  // ------------------------------------------------ branch operations (git + API + web)
+  let cookie = ''; // browser-like session for web-level routes (assigned below)
+  section('branch operations: names with slash & dots');
+  await git(['checkout', 'master'], { cwd: work, env: gitEnv() });
+  await git(['checkout', '-b', 'feature/foo'], { cwd: work, env: gitEnv() });
+  writeFileSync(`${work}/slash.txt`, 'slash branch\n');
+  await git(['add', '.'], { cwd: work });
+  await git(['commit', '-m', 'slash branch commit'], { cwd: work, env: gitEnv() });
+  r = await git(['push', 'origin', 'feature/foo'], { cwd: work, env: gitEnv() });
+  check('push branch with slash in name', r.ok, r.stderr);
+  r = await git(['ls-remote', authUrl(`/${U}/${R}.git`)], { env: gitEnv() });
+  check('ls-remote shows slash branch', r.ok && r.stdout.includes('refs/heads/feature/foo'), r.stdout);
+  r = await api('GET', `/api/v1/repos/${U}/${R}/branches`, T);
+  check('API branches lists slash branch', r.status === 200 && r.text.includes('feature/foo'), r.status);
+  const slashSha = (await git(['rev-parse', 'feature/foo'], { cwd: work })).stdout.trim();
+  r = await api('GET', `/api/v1/repos/${U}/${R}/branches/${encodeURIComponent('feature/foo')}`, T);
+  check('API single slash branch sha matches rev-parse', r.status === 200 && JSON.stringify(r.json).includes(slashSha.slice(0, 10)), r.text.slice(0, 150));
+  const srcPage = await fetch(BASE + `/${U}/${R}/src/feature/foo/slash.txt`, { headers: { Cookie: cookie } });
+  check('short-form src browse of slash branch (greedy ref match)', srcPage.status === 200 && /slash branch/.test(await srcPage.text()), srcPage.status);
+  r = await api('GET', `/api/v1/repos/${U}/${R}/raw/${encodeURIComponent('feature/foo')}/slash.txt`, T);
+  check('raw of slash branch via encoded ref segment', r.status === 200 && r.text === 'slash branch\n', r.status + ' ' + r.text.slice(0, 40));
+  await git(['checkout', '-b', 'v1.0.x', 'master'], { cwd: work, env: gitEnv() });
+  r = await git(['push', 'origin', 'v1.0.x'], { cwd: work, env: gitEnv() });
+  check('push branch with dots in name', r.ok, r.stderr);
+
+  section('branch operations: web-level delete');
+  // branch 'web-del' then delete via the web route (session + csrf)
+  await git(['checkout', '-b', 'web-del', 'master'], { cwd: work, env: gitEnv() });
+  await git(['push', 'origin', 'web-del'], { cwd: work, env: gitEnv() });
+  // browser-like session
+  {
+    const res = await fetch(BASE + '/user/sign-in');
+    cookie = (res.headers.get('set-cookie') || '').split(';')[0];
+  }
+  const loginRes = await fetch(BASE + '/api/web/user/sign-in', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
+    body: `username=${U}&password=${encodeURIComponent(PASS)}`,
+  });
+  cookie = [cookie, ...((loginRes.headers.get('set-cookie') || '').match(/[^ ]+?=[^;]*;/g) || []).map((c) => c.trim().replace(/;$/, ''))].filter(Boolean).join('; ');
+  check('web session login', loginRes.status === 200, loginRes.status);
+  // upstream DeleteBranchPost: JS-driven POST, no csrf form field; commit/redirect_to in query
+  const pageHtml = await (await fetch(BASE + `/${U}/${R}/branches`, { headers: { Cookie: cookie } })).text();
+  check('branches page renders for session', pageHtml.includes('web-del'), pageHtml.length);
+  const delRes = await fetch(BASE + `/${U}/${R}/branches/delete/web-del`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: '',
+    redirect: 'manual',
+  });
+  check('web branch delete accepts (303)', [302, 303].includes(delRes.status), delRes.status);
+  r = await git(['ls-remote', authUrl(`/${U}/${R}.git`)], { env: gitEnv() });
+  check('web-deleted branch gone from refs', !r.stdout.includes('refs/heads/web-del'), r.stdout);
+
+  section('branch operations: default branch switch');
+  await git(['checkout', '-b', 'main2', 'master'], { cwd: work, env: gitEnv() });
+  await git(['push', 'origin', 'main2'], { cwd: work, env: gitEnv() });
+  const page2 = await (await fetch(BASE + `/${U}/${R}/settings/branches`, { headers: { Cookie: cookie } })).text();
+  const csrf2 = (page2.match(/name="_csrf" value="([^"]+)"/) || [])[1] || '';
+  const defRes = await fetch(BASE + `/${U}/${R}/settings/branches/default_branch`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `_csrf=${encodeURIComponent(csrf2)}&branch=main2`,
+    redirect: 'manual',
+  });
+  check('default branch switch accepted (303)', [302, 303].includes(defRes.status), defRes.status);
+  r = await api('GET', `/api/v1/repos/${U}/${R}`, T);
+  const db2 = (payload(r)?.default_branch) || (r.json.default_branch);
+  check('API shows new default branch', String(db2) === 'main2', JSON.stringify(r.json).slice(0, 150));
+  r = await git(['clone', authUrl(`/${U}/${R}.git`), `${dir}/${R}-defbranch`], { env: gitEnv() });
+  const headRef = r.ok ? (await git(['symbolic-ref', 'HEAD'], { cwd: `${dir}/${R}-defbranch` })).stdout.trim() : '';
+  check('fresh clone checks out new default', headRef === 'refs/heads/main2', headRef);
+  // switch back to master
+  const page3 = await (await fetch(BASE + `/${U}/${R}/settings/branches`, { headers: { Cookie: cookie } })).text();
+  const csrf3 = (page3.match(/name="_csrf" value="([^"]+)"/) || [])[1] || '';
+  await fetch(BASE + `/${U}/${R}/settings/branches/default_branch`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `_csrf=${encodeURIComponent(csrf3)}&branch=master`,
+    redirect: 'manual',
+  });
+
+  section('branch operations: PR merge across branches');
+  await git(['checkout', '-b', 'pr-branch', 'master'], { cwd: work, env: gitEnv() });
+  writeFileSync(`${work}/pr-file.txt`, 'merged via pr\n');
+  await git(['add', '.'], { cwd: work });
+  await git(['commit', '-m', 'pr merge commit'], { cwd: work, env: gitEnv() });
+  r = await git(['push', 'origin', 'pr-branch'], { cwd: work, env: gitEnv() });
+  check('push pr source branch', r.ok, r.stderr);
+  const prPage = await (await fetch(BASE + `/${U}/${R}/compare/master...pr-branch`, { headers: { Cookie: cookie } })).text();
+  const prCsrf = (prPage.match(/name="_csrf" value="([^"]+)"/) || [])[1] || '';
+  const prRes = await fetch(BASE + `/${U}/${R}/compare/master...pr-branch`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `_csrf=${encodeURIComponent(prCsrf)}&title=branch-merge-pr&content=created by git-test`,
+    redirect: 'manual',
+  });
+  const prLoc = prRes.headers.get('location') || '';
+  check('create PR from branch (redirect to /pulls/N)', [302, 303].includes(prRes.status) && /pulls\/\d+$/.test(prLoc), prRes.status + ' ' + prLoc);
+  const prIndex = Number((prLoc.match(/pulls\/(\d+)$/) || [])[1]);
+  if (prIndex) {
+    const mergeRes = await fetch(BASE + `/${U}/${R}/pulls/${prIndex}/merge`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '',
+      redirect: 'manual',
+    });
+    check('merge PR accepted', [302, 303, 200].includes(mergeRes.status), mergeRes.status);
+    r = await api('GET', `/api/v1/repos/${U}/${R}/raw/master/pr-file.txt`, T);
+    check('merged content on base branch', r.status === 200 && r.text === 'merged via pr\n', r.status);
+    r = await api('GET', `/api/v1/repos/${U}/${R}/pulls/${prIndex}`); // not an upstream endpoint; use issue
+    r = await api('GET', `/api/v1/repos/${U}/${R}/issues/${prIndex}`, T);
+    check('PR marked merged', r.status === 200 && /merged["']?:\s*true|"has_merged":1/.test(r.text), r.text.slice(0, 150));
+  }
+  // compare page is a session-only web route (upstream reqSignIn)
+  const cmpRes = await fetch(BASE + `/${U}/${R}/compare/master...v1.0.x`, { headers: { Cookie: cookie }, redirect: 'manual' });
+  check('compare page between branches', cmpRes.status === 200, cmpRes.status);
+
   // ------------------------------------------------ cleanup
   section('cleanup');
   await api('DELETE', `/api/v1/repos/${U}/${R}`, T);

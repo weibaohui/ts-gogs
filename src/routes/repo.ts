@@ -622,16 +622,27 @@ export async function CommitRaw(c: Context): Promise<void> {
 }
 
 export async function Raw(c: Context): Promise<void> {
+  const repo = c.Repo.Repository!;
+  const repoDir = repo.RepoPath();
   const wildcard = c.Params(':*');
-  const slash = wildcard.indexOf('/');
-  if (slash < 0) {
+  // resolve ref greedily like RepoRef so slash-named branches work whether the
+  // client sends /raw/feature/foo/... or the upstream-style /raw/feature%2Ffoo/...
+  // (flamego {ref} is a single segment and unescapes %2F — both arrive here the same)
+  const parts = wildcard.split('/');
+  let ref = '';
+  let filePath = '';
+  for (let i = 1; i < parts.length; i++) {
+    const cand = parts.slice(0, i).join('/');
+    if (await git.resolveRef(repoDir, cand)) {
+      ref = cand;
+      filePath = parts.slice(i).join('/');
+      break;
+    }
+  }
+  if (!ref || !filePath) {
     c.NotFound();
     return;
   }
-  const ref = wildcard.slice(0, slash);
-  const filePath = wildcard.slice(slash + 1);
-  const repo = c.Repo.Repository!;
-  const repoDir = repo.RepoPath();
   const resolved = await git.resolveRef(repoDir, ref);
   if (!resolved) {
     c.NotFound();

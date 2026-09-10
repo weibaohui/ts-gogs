@@ -216,9 +216,14 @@ export async function refExists(repoDir: string, rev: string): Promise<boolean> 
 }
 
 /** Resolve branch → tag → 7..40 hex sha, mirroring gogs RefCommits handling. */
+/** gogs RevParse semantics: resolve a branch/tag/SHA to its commit ID. */
 export async function resolveRef(repoDir: string, ref: string): Promise<string | null> {
-  if (await refExists(repoDir, 'refs/heads/' + ref)) return 'refs/heads/' + ref;
-  if (await refExists(repoDir, 'refs/tags/' + ref)) return 'refs/tags/' + ref;
+  for (const candidate of ['refs/heads/' + ref, 'refs/tags/' + ref]) {
+    if (await refExists(repoDir, candidate)) {
+      const out = await gitOK(repoDir, 'rev-parse', '--verify', '--end-of-options', candidate + '^{commit}');
+      return out ? out.toString().trim() : null;
+    }
+  }
   if (/^[0-9a-f]{7,40}$/.test(ref) && (await refExists(repoDir, ref + '^{commit}'))) return ref;
   return null;
 }
@@ -459,6 +464,12 @@ export interface Diff {
   totalDeletions: number;
   numFiles: number;
   isIncomplete: boolean;
+  // Go-exported aliases — gogs templates read .Diff.NumFiles / .Diff.TotalAdditions / …
+  Files: DiffFile[];
+  NumFiles: number;
+  TotalAdditions: number;
+  TotalDeletions: number;
+  IsIncomplete: boolean;
 }
 
 export async function repoDiff(repoDir: string, rev: string, base?: string, maxFiles = 1000, maxLines = 5000): Promise<Diff> {
@@ -490,7 +501,7 @@ export async function mergeBase(repoDir: string, base: string, head: string): Pr
 }
 
 export function parseDiff(text: string, maxFiles = 1000, maxLines = 5000): Diff {
-  const diff: Diff = { files: [], totalAdditions: 0, totalDeletions: 0, numFiles: 0, isIncomplete: false };
+  const diff: Diff = { files: [], totalAdditions: 0, totalDeletions: 0, numFiles: 0, isIncomplete: false, Files: [], NumFiles: 0, TotalAdditions: 0, TotalDeletions: 0, IsIncomplete: false };
   if (!text) return diff;
   const lines = text.split('\n');
   let curFile: DiffFile | null = null;
@@ -580,6 +591,11 @@ export function parseDiff(text: string, maxFiles = 1000, maxLines = 5000): Diff 
     }
   }
   diff.numFiles = diff.files.length;
+  diff.Files = diff.files;
+  diff.NumFiles = diff.numFiles;
+  diff.TotalAdditions = diff.totalAdditions;
+  diff.TotalDeletions = diff.totalDeletions;
+  diff.IsIncomplete = diff.isIncomplete;
   return diff;
 }
 

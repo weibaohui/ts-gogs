@@ -10,6 +10,8 @@ interface Route {
   regex: RegExp;
   paramNames: string[];
   handlers: Handler[];
+  /** per-segment kind: 0=static literal, 1=:param, 2=wildcard — macaron tree priority */
+  kinds: number[];
 }
 
 function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] } {
@@ -96,12 +98,23 @@ function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] 
   return { regex: new RegExp('^' + source + '/?$'), paramNames };
 }
 
+/** macaron Tree semantics: at any segment position a static literal beats a
+ *  :param, which beats a * wildcard — regardless of registration order. */
+function segmentKinds(pattern: string): number[] {
+  if (pattern.startsWith('/^') || pattern.startsWith('^')) return [1];
+  return pattern
+    .split('/')
+    .slice(1)
+    .filter((s) => s !== '')
+    .map((seg) => (seg === '*' ? 2 : seg.includes(':') ? 1 : 0));
+}
+
 export class Router {
   private routes: Route[] = [];
 
   add(method: string, pattern: string, ...handlers: Handler[]): void {
     const { regex, paramNames } = compilePattern(pattern);
-    this.routes.push({ method, pattern, regex, paramNames, handlers });
+    this.routes.push({ method, pattern, regex, paramNames, handlers, kinds: segmentKinds(pattern) });
   }
 
   get(pattern: string, ...h: Handler[]) { this.add('GET', pattern, ...h); }
@@ -122,8 +135,20 @@ export class Router {
     this.route(pattern, 'GET,POST', ...h);
   }
 
+  /** macaron tree priority: a route wins over another if at the first differing
+   *  segment it is more specific (static 0 < param 1 < wildcard 2). Ties keep
+   *  registration order (best stays). */
+  private static moreSpecific(a: Route, b: Route): Route {
+    const n = Math.min(a.kinds.length, b.kinds.length);
+    for (let i = 0; i < n; i++) {
+      if (a.kinds[i] !== b.kinds[i]) return a.kinds[i] < b.kinds[i] ? a : b;
+    }
+    return a; // tie — prefer the earlier-registered route (a is current best)
+  }
+
   /** Find first matching route. HEAD falls back to GET (SetAutoHead). */
   match(method: string, pathname: string): { route: Route; params: Record<string, string> } | null {
+    let best: { route: Route; params: Record<string, string> } | null = null;
     let getFallback: { route: Route; params: Record<string, string> } | null = null;
     for (const r of this.routes) {
       if (r.method !== 'ANY' && r.method !== method) {
@@ -131,17 +156,20 @@ export class Router {
       }
       const m = r.regex.exec(pathname);
       if (!m) continue;
-      const params: Record<string, string> = {};
-      r.paramNames.forEach((name, i) => {
-        params[name === '*' ? ':*' : ':' + name] = decodeURIComponent(m[i + 1] ?? '');
-      });
+      const hit = {
+        route: r,
+        params: r.paramNames.reduce((acc: Record<string, string>, name, i) => {
+          acc[name === '*' ? ':*' : ':' + name] = decodeURIComponent(m[i + 1] ?? '');
+          return acc;
+        }, {}),
+      };
       if (method === 'HEAD' && r.method === 'GET') {
-        if (!getFallback) getFallback = { route: r, params };
+        if (!getFallback || Router.moreSpecific(getFallback.route, hit.route) === hit.route) getFallback = hit;
         continue;
       }
-      return { route: r, params };
+      if (!best || Router.moreSpecific(best.route, hit.route) === hit.route) best = hit;
     }
-    return getFallback;
+    return best ?? getFallback;
   }
 }
 

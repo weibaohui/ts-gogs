@@ -872,9 +872,18 @@ export async function NewIssue(c: Context): Promise<void> {
   c.Data['PageIsIssues'] = true;
   c.Data['RequireSimpleMDE'] = true;
   c.Data['RequireDropzone'] = true;
+  c.Data['RequireHighlightJS'] = true;
+  // gogs RetrieveRepoMetas + query-prefilled fields (new_form.tmpl)
   c.Data['Labels'] = db.listLabels(repo.id);
-  c.Data['Milestones'] = db.listMilestones(repo.id, 0);
-  c.Data['Collaborators'] = db.listCollaborations(repo.id);
+  c.Data['OpenMilestones'] = db.listMilestones(repo.id, 0);
+  c.Data['ClosedMilestones'] = db.listMilestones(repo.id, 1);
+  c.Data['Assignees'] = db.listCollaborations(repo.id);
+  c.Data['title'] = c.Query('title');
+  c.Data['content'] = c.Query('content');
+  c.Data['label_ids'] = c.Query('label_ids');
+  c.Data['milestone_id'] = c.Query('milestone');
+  c.Data['assignee_id'] = c.Query('assignee');
+  c.Data['HasSelectedLabel'] = false;
   c.Success('repo/issue/new');
 }
 
@@ -923,14 +932,9 @@ export async function NewIssuePost(c: Context): Promise<void> {
   c.Redirect(repoLink(c) + '/issues/' + index);
 }
 
-export async function ViewIssue(c: Context): Promise<void> {
+/** All template data shared by the issue/PR view pages (conversation, commits, files tabs). */
+async function buildIssueViewData(c: Context, issue: any): Promise<void> {
   const repo = c.Repo.Repository!;
-  const index = c.ParamsInt64(':index');
-  const issue = db.getIssueByIndex(repo.id, index);
-  if (!issue) {
-    c.NotFound();
-    return;
-  }
   c.Data['PageIsIssueList'] = issue.is_pull ? false : true;
   c.Data['PageIsPullList'] = !!issue.is_pull;
   c.Data['PageIsPullConversation'] = !!issue.is_pull;
@@ -993,6 +997,29 @@ export async function ViewIssue(c: Context): Promise<void> {
   }
   c.Data['IsIssuePoster'] = issue.poster_id === c.UserID();
   c.Data['IsIssueWriter'] = c.Repo.IsWriter();
+
+  // participants: poster + distinct comment posters (gogs GetParticipantsByIssueID)
+  const seen = new Set<number>([issue.poster_id]);
+  const participants: any[] = [];
+  for (const cm of comments) {
+    const u = cm.Poster;
+    if (u && !seen.has(u.id)) {
+      seen.add(u.id);
+      participants.push(u);
+    }
+  }
+  c.Data['Participants'] = participants;
+  c.Data['NumParticipants'] = participants.length;
+}
+
+export async function ViewIssue(c: Context): Promise<void> {
+  const index = c.ParamsInt64(':index');
+  const issue = db.getIssueByIndex(c.Repo.Repository!.id, index);
+  if (!issue) {
+    c.NotFound();
+    return;
+  }
+  await buildIssueViewData(c, issue);
   c.Success('repo/issue/view');
 }
 
@@ -1609,43 +1636,122 @@ export async function CompareAndPullRequest(c: Context): Promise<void> {
   const wildcard = c.Params(':*');
   const parts = wildcard.split('...');
   const repo = c.Repo.Repository!;
-  const baseBranch = parts[0] || repo.default_branch;
-  let headUser = repo.OwnerName();
-  let headBranch = parts[1] ?? '';
-  if (headBranch.includes(':')) {
-    [headUser, headBranch] = headBranch.split(':');
-  }
   c.Data['Title'] = c.Tr('repo.pulls.compare_changes');
   c.Data['PageIsComparePull'] = true;
-  c.Data['BaseBranch'] = baseBranch;
-  c.Data['HeadBranch'] = headBranch;
-  c.Data['HeadUserName'] = headUser;
+  c.Data['IsDiffCompare'] = true;
   c.Data['RequireSimpleMDE'] = true;
   c.Data['RequireHighlightJS'] = true;
+  c.Data['IsSplitStyle'] = c.Query('style') === 'split';
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    c.NotFound();
+    return;
+  }
+  const baseBranch = parts[0];
+  let headUserName = repo.OwnerName();
+  let headBranch = parts[1];
+  let isSameRepo = true;
+  if (headBranch.includes(':')) {
+    [headUserName, headBranch] = headBranch.split(':');
+    isSameRepo = headUserName === repo.OwnerName();
+  }
+  const headUser = db.getUserByUsername(headUserName);
+  const headRepo = isSameRepo ? repo : db.getRepoByName(headUserName, repo.name) ?? (db.listReposByOwner(headUser?.id ?? -1).find((r) => r.fork_id === repo.id) ?? null);
+  c.Data['BaseBranch'] = baseBranch;
+  c.Data['HeadBranch'] = headBranch;
+  c.Data['HeadUser'] = headUser;
+  c.Data['HeadUserName'] = headUserName;
+  c.Data['PullRequestCtx'] = { SameRepo: isSameRepo };
+  if (!headUser || !headRepo) {
+    c.NotFound();
+    return;
+  }
 
-  const headRepo = headUser === repo.OwnerName() ? repo : db.getRepoByName(headUser, repo.name) ?? (db.getUserByUsername(headUser) ? db.listReposByOwner(db.getUserByUsername(headUser)!.id).find((r) => r.fork_id === repo.id) ?? null : null);
-  if (headRepo) {
-    const headDir = headRepo.RepoPath();
-    const mergeBase = await git.mergeBase(headDir, baseBranch, headBranch);
-    if (mergeBase) {
-      const commits = await git.gitOK(headDir, 'log', '--pretty=format:%H', '--end-of-options', `${mergeBase}...${headBranch}`, '--');
-      const shas = (commits?.toString().trim().split('\n').filter(Boolean) ?? []).reverse();
-      const commitList: any[] = [];
-      for (const sha of shas) {
-        try {
-          const cm = await git.catFileCommit(headDir, sha);
-          commitList.push(db.goAlias({ ...git.commitView(cm), User: db.getUserByEmail(cm.author.email) }));
-        } catch {
-          // ignore
-        }
-      }
-      c.Data['Commits'] = commitList.map((cm: any) => db.goAlias({ ...cm }));
-      const diff = await git.repoDiff(headDir, headBranch, mergeBase, conf.maxDiffFiles, conf.maxDiffLines);
-      c.Data['Diff'] = diff;
-      c.Data['NumFiles'] = diff.numFiles;
+  const baseDir = repo.RepoPath();
+  const headDir = headRepo.RepoPath();
+  const baseBranches = (await git.getBranches(baseDir)).map((b: any) => b.name);
+  const headBranches = (await git.getBranches(headDir)).map((b: any) => b.name);
+  c.Data['Branches'] = baseBranches;
+  c.Data['HeadBranches'] = headBranches;
+  // gogs RevParse-validates both refs
+  if (!(await git.resolveRef(baseDir, baseBranch)) || !(await git.resolveRef(headDir, headBranch))) {
+    c.NotFound();
+    return;
+  }
+
+  // existing open PR for this head/base pair — show link instead of the form
+  const prRow = db
+    .db()
+    .prepare(
+      `SELECT pr.*, i.\"index\" AS pr_pr_index FROM pull_request pr JOIN issue i ON i.id = pr.issue_id
+       WHERE pr.head_repo_id = ? AND pr.head_branch = ? AND pr.base_repo_id = ? AND pr.base_branch = ? AND pr.has_merged = 0 AND i.is_closed = 0`
+    )
+    .get(headRepo.id, headBranch, repo.id, baseBranch) as any;
+  if (prRow) {
+    c.Data['HasPullRequest'] = true;
+    c.Data['PullRequest'] = db.goAlias({ ...prRow, Index: prRow.pr_pr_index });
+    c.Success('repo/pulls/compare');
+    return;
+  }
+
+  const mergeBase = await git.mergeBase(headDir, baseBranch, headBranch);
+  if (!mergeBase) {
+    c.Data['IsNoMergeBase'] = true;
+    c.Success('repo/pulls/compare');
+    return;
+  }
+  c.Data['BeforeCommitID'] = mergeBase;
+
+  const headCommitID = await git.resolveRef(headDir, headBranch);
+  c.Data['CommitRepoLink'] = headRepo.Link();
+  c.Data['AfterCommitID'] = headCommitID;
+  if (headCommitID === mergeBase) {
+    c.Data['IsNothingToCompare'] = true;
+    c.Success('repo/pulls/compare');
+    return;
+  }
+
+  const commits = await git.gitOK(headDir, 'log', '--pretty=format:%H', '--end-of-options', `${mergeBase}...${headBranch}`, '--');
+  const shas = (commits?.toString().trim().split('\n').filter(Boolean) ?? []).reverse();
+  const commitList: any[] = [];
+  for (const sha of shas) {
+    try {
+      const cm = await git.catFileCommit(headDir, sha);
+      commitList.push(db.goAlias({ ...git.commitView(cm), User: db.getUserByEmail(cm.author.email) }));
+    } catch {
+      // ignore
     }
   }
-  c.Success('repo/diff/compare');
+  c.Data['Commits'] = commitList;
+  c.Data['CommitCount'] = commitList.length;
+  c.Data['CommitsCount'] = commitList.length;
+  c.Data['Username'] = headUserName;
+  c.Data['Reponame'] = headRepo.name;
+  const diff = await git.repoDiff(headDir, headBranch, mergeBase, conf.maxDiffFiles, conf.maxDiffLines);
+  c.Data['Diff'] = diff;
+  c.Data['NumFiles'] = diff.numFiles;
+  c.Data['DiffNotAvailable'] = diff.numFiles === 0;
+  const headTarget = `${headUserName}/${headRepo.name}`;
+  c.Data['SourcePath'] = `${conf.subpath}/${headTarget}/src/${headCommitID}`;
+  c.Data['RawPath'] = `${conf.subpath}/${headTarget}/raw/${headCommitID}`;
+  c.Data['BeforeSourcePath'] = `${conf.subpath}/${headTarget}/src/${mergeBase}`;
+  c.Data['BeforeRawPath'] = `${conf.subpath}/${headTarget}/raw/${mergeBase}`;
+
+  // new-PR form metadata (gogs RetrieveRepoMetas — writers only)
+  if (c.Repo.IsWriter()) {
+    c.Data['Labels'] = db.listLabels(repo.id);
+    c.Data['OpenMilestones'] = db.listMilestones(repo.id, 0);
+    c.Data['ClosedMilestones'] = db.listMilestones(repo.id, 1);
+    c.Data['Assignees'] = db.listCollaborations(repo.id);
+  }
+  c.Data['title'] = '';
+  c.Data['content'] = '';
+  c.Data['label_ids'] = '';
+  c.Data['milestone_id'] = '';
+  c.Data['assignee_id'] = '';
+  c.Data['HasSelectedLabel'] = false;
+  const { repoEditorconfig } = await import('../editorconfig.js');
+  c.Data['Editorconfig'] = await repoEditorconfig(headDir, headBranch);
+  c.Success('repo/pulls/compare');
 }
 
 export async function CompareAndPullRequestPost(c: Context): Promise<void> {
@@ -1708,14 +1814,33 @@ export async function ViewPull(c: Context): Promise<void> {
   c.Data['PageIsPullConversation'] = true;
 }
 
+/** gogs c.Repo.PullRequest context used by the PR tab pages' "New pull request" button. */
+function prPullCtx(c: Context, pr: any): { SameRepo: boolean; Allowed: boolean; HeadInfo: string } {
+  const repo = c.Repo.Repository!;
+  if (!pr) return { SameRepo: true, Allowed: c.Repo.IsWriter(), HeadInfo: '' };
+  const sameRepo = (pr.head_repo_id ?? repo.id) === repo.id;
+  const headInfo = sameRepo ? pr.head_branch : `${pr.head_user_name}:${pr.head_branch}`;
+  return { SameRepo: sameRepo, Allowed: c.Repo.IsWriter(), HeadInfo: headInfo };
+}
+
 export async function ViewPullCommits(c: Context): Promise<void> {
   const repo = c.Repo.Repository!;
   const index = c.ParamsInt64(':index');
   const issue = db.getIssueByIndex(repo.id, index);
+  if (!issue) {
+    c.NotFound();
+    return;
+  }
+  await buildIssueViewData(c, issue);
   const pr = issue ? (db.db().prepare('SELECT * FROM pull_request WHERE issue_id = ?').get(issue.id) as any) : null;
   c.Data['PageIsPullCommits'] = true;
   c.Data['PullRequest'] = pr;
-  c.Data['Issue'] = issue;
+  c.Data['PullRequestCtx'] = prPullCtx(c, pr);
+  c.Data['BranchName'] = repo.default_branch || conf.defaultBranch;
+  c.Data['Username'] = repo.OwnerName();
+  c.Data['Reponame'] = repo.name;
+  c.Data['CommitsCount'] = (c.Data['Commits'] as any[])?.length ?? 0;
+  c.Data['CommitRepoLink'] = repoLink(c);
   if (pr) {
     const headRepo = db.getRepoByID(pr.head_repo_id) ?? repo;
     const shas = (await git.gitOK(headRepo.RepoPath(), 'log', '--pretty=format:%H', '--end-of-options', `${pr.merge_base}...${pr.head_branch}`, '--'))?.toString().trim().split('\n').filter(Boolean) ?? [];
@@ -1737,10 +1862,16 @@ export async function ViewPullFiles(c: Context): Promise<void> {
   const repo = c.Repo.Repository!;
   const index = c.ParamsInt64(':index');
   const issue = db.getIssueByIndex(repo.id, index);
+  if (!issue) {
+    c.NotFound();
+    return;
+  }
+  await buildIssueViewData(c, issue);
   const pr = issue ? (db.db().prepare('SELECT * FROM pull_request WHERE issue_id = ?').get(issue.id) as any) : null;
   c.Data['PageIsPullFiles'] = true;
   c.Data['PullRequest'] = pr;
-  c.Data['Issue'] = issue;
+  c.Data['PullRequestCtx'] = prPullCtx(c, pr);
+  c.Data['BranchName'] = repo.default_branch || conf.defaultBranch;
   if (pr) {
     const headRepo = db.getRepoByID(pr.head_repo_id) ?? repo;
     if (pr.merge_base) {

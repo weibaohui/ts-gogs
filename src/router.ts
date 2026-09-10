@@ -44,10 +44,42 @@ function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] 
       parts.push('(.*)');
       continue;
     }
-    const m = /^:([a-zA-Z_][a-zA-Z0-9_]*)((?:\((?:[^()\\]|\\.)*\))?)$/.exec(seg);
-    if (m) {
-      paramNames.push(m[1]);
-      parts.push(m[2] ? m[2] : '([^/]+)');
+    // general segment scan: literal text mixed with :name and :name(rx) params
+    // (e.g. `:sha([a-f0-9]{7,40}).:ext(patch|diff)`)
+    let rx = '';
+    let k = 0;
+    let matched = false;
+    while (k < seg.length) {
+      if (seg[k] === ':') {
+        const nm = /^:([a-zA-Z_][a-zA-Z0-9_]*)/.exec(seg.slice(k));
+        if (nm) {
+          paramNames.push(nm[1]);
+          matched = true;
+          k += nm[0].length;
+          if (seg[k] === '(') {
+            // balanced-paren rx group — wrap in a capture group for params
+            let depth = 1;
+            let e = k + 1;
+            while (e < seg.length && depth > 0) {
+              if (seg[e] === '(') depth++;
+              else if (seg[e] === ')') depth--;
+              else if (seg[e] === '\\') e++;
+              e++;
+            }
+            rx += '(' + seg.slice(k + 1, e - 1) + ')';
+            k = e;
+          } else {
+            rx += '([^/]+)';
+            k += 0;
+          }
+          continue;
+        }
+      }
+      rx += seg[k].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      k++;
+    }
+    if (matched) {
+      parts.push(rx);
       continue;
     }
     parts.push(seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));

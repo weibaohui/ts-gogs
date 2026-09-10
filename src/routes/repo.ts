@@ -584,7 +584,14 @@ export async function Diff(c: Context): Promise<void> {
 }
 
 export async function CommitRaw(c: Context): Promise<void> {
-  const repo = c.Repo.Repository!;
+  // this route runs outside RepoAssignment (bridged raw endpoint)
+  const owner = db.getUserByUsername(c.Params(':username'));
+  const repo0 = owner ? db.getRepoByOwnerAndName(owner, c.Params(':reponame')) : null;
+  if (!repo0) {
+    c.NotFound();
+    return;
+  }
+  const repo = repo0;
   const repoDir = repo.RepoPath();
   const sha = c.Params(':sha');
   const ext = c.Params(':ext');

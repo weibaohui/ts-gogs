@@ -327,7 +327,6 @@ export class Context {
 
   /** gogs 404: redirect to SPA shell — we render a simple 404 page (status/404 template missing in this version) */
   NotFound(): void {
-    console.error('[NotFound] at', this.Path(), new Error().stack?.split('\n').slice(2, 5).join(' | '));
     // gogs 404 hands the request to the React SPA shell with status 404
     this.rendered = true;
     if (serveWebHandler) {

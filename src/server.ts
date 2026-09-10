@@ -368,9 +368,20 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   // /css/gogs.min.css would be captured by /:username/:reponame)
   if (serveStaticPrefix(req, res, pathname)) return;
 
+  // SPA dist static files: vite base './' makes asset URLs relative to the
+  // page path (e.g. /user/sign-in → /user/assets/index-*.js), so any
+  // .../assets/<file> request resolves against public/dist/assets
+  const assetFile = /\/(?:[a-zA-Z0-9_.-]+\/)?assets\/([a-zA-Z0-9_.-]+)$/.exec(pathname);
+  if ((req.method === 'GET' || req.method === 'HEAD') && assetFile) {
+    const safe = path.normalize(assetFile[1]).replace(/^(\.\.\/)+/, '');
+    if (serveFile(res, path.join(conf.workDir, 'public', 'dist', 'assets', safe), false)) return;
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+
   // route table
   const match = router.match(req.method ?? 'GET', pathname);
-  console.log('[req]', req.method, pathname, match ? '→ ' + match.route.pattern : '→ NO MATCH');
   if (match) {
     c.params = match.params;
     await runChain(match.route.handlers, c);

@@ -55,6 +55,10 @@ export function registerWebRoutes(m: Router): void {
   m.get('/user/settings/delete', reqSignIn, settingsGuard, user.SettingsDelete);
   m.post('/user/settings/delete', reqSignIn, settingsGuard, user.SettingsDeletePost);
 
+  // SPA-covered paths: serve the SPA shell with 200 (gogs catch-all ServeWeb)
+  for (const spa of ['/user/sign-in', '/user/sign-up', '/user/mfa', '/user/reset-password', '/user/activate']) {
+    m.get(spa, (c: Context) => { c.ServeWeb(); });
+  }
   m.any('/user/activate_email', user.ActivateEmail);
   m.get('/user/email2user', user.Email2User);
   m.get('/user/avatar/:hash', (c: Context) => c.Redirect(conf.subpath + '/img/avatar_default.png'));
@@ -256,7 +260,8 @@ export function registerWebRoutes(m: Router): void {
   m.get('/:username/:reponame/forks', ignSignIn, repo.RepoAssignment(), repo.Forks);
   m.get('/:username/:reponame/raw/*', ignSignIn, repo.Raw);
   m.get('/:username/:reponame/commit/:sha([a-f0-9]{7,40}).:ext(patch|diff)', ignSignIn, repo.CommitRaw);
-  m.get('/:username/:reponame/commit/:sha([a-f0-9]{7,40})', ignSignIn, repo.RepoAssignment(), repo.Diff);
+  // gogs master serves /commit/<sha> via the React SPA (c.ServeWeb)
+  m.get('/:username/:reponame/commit/:sha([a-f0-9]{7,40})', ignSignIn, (c: Context) => { c.ServeWeb(); });
   m.get('/:username/:reponame/commits', ignSignIn, repo.RepoAssignment(), repo.RepoRef(), repo.Commits);
 
   m.get('/:username/:reponame/tasks/trigger', repo.TriggerTask);

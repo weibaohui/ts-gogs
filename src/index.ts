@@ -60,19 +60,30 @@ async function main(): Promise<void> {
   db();
   console.log(`Database:       ${conf.dbPath}`);
 
-  // dsh-git-server 插件模式：DSH_BOOTSTRAP_ADMIN=user:pass 且用户库为空 → 播种管理员
+  // dsh-git-server 插件模式：
+  //   DSH_BOOTSTRAP_ADMIN=user:pass — 用户库为空时播种管理员
+  //   DSH_ADMIN_PASSWORD — 每次启动把该管理员密码重置为此值（设置页轮换密码的落点）
   const bootstrap = process.env.DSH_BOOTSTRAP_ADMIN || '';
-  if (bootstrap.includes(':')) {
+  const adminPass = process.env.DSH_ADMIN_PASSWORD || '';
+  const adminName = bootstrap.split(':')[0] || 'root';
+  if (bootstrap.includes(':') || adminPass) {
     const count = (db().prepare('SELECT COUNT(*) AS c FROM user WHERE type = 0').get() as any).c;
+    const { randomSalt, encodePassword } = await import('./authx/password.js');
+    const now = Math.floor(Date.now() / 1000);
     if (count === 0) {
-      const idx = bootstrap.indexOf(':');
-      const name = bootstrap.slice(0, idx) || 'root';
-      const pass = bootstrap.slice(idx + 1);
-      const { randomSalt, encodePassword } = await import('./authx/password.js');
+      const pass = bootstrap.includes(':') ? bootstrap.slice(bootstrap.indexOf(':') + 1) : (adminPass || 'gogs-admin');
       const salt = randomSalt();
       db().prepare('INSERT INTO user (name, lower_name, email, passwd, salt, type, is_admin, created_unix, updated_unix) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)')
-        .run(name, name.toLowerCase(), `${name}@dsh.local`, encodePassword(pass, salt), salt, Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000));
-      console.log(`Bootstrap admin created: ${name}`);
+        .run(adminName, adminName.toLowerCase(), `${adminName}@dsh.local`, encodePassword(pass, salt), salt, now, now);
+      console.log(`Bootstrap admin created: ${adminName}`);
+    } else if (adminPass) {
+      // 管理员已存在：重置密码为插件配置值（设置页轮换的真实落点）
+      const admin = db().prepare('SELECT id, salt FROM user WHERE type = 0 AND is_admin = 1 ORDER BY id LIMIT 1').get() as any;
+      if (admin) {
+        const { encodePassword: enc } = await import('./authx/password.js');
+        db().prepare('UPDATE user SET passwd = ?, updated_unix = ? WHERE id = ?').run(enc(adminPass, admin.salt), now, admin.id);
+        console.log(`Admin password synced from plugin settings`);
+      }
     }
   }
 

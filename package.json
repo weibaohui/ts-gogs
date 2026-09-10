@@ -12,7 +12,8 @@
     "test": "bash test/run-all.sh",
     "test:api": "node test/api-test.mjs",
     "test:git": "node test/git-test.mjs",
-    "test:ui": "node test/ui-test.mjs"
+    "test:ui": "node test/ui-test.mjs",
+    "test:drill": "node test/scenario-dev.mjs"
   },
   "license": "MIT",
   "dependencies": {

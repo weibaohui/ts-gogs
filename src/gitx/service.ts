@@ -174,12 +174,11 @@ export async function processPushUpdate(opts: {
 
   let commits: any[] = [];
   if (opts.oldSha === EMPTY_SHA) {
-    // new branch: take up to 10 commits (new + 9 ancestors)
+    // new branch: take up to 10 commits (new + 9 ancestors).
+    // upstream fires only the commit-push action here — no separate "create" event.
     const head = await git.catFileCommit(repoDir, opts.newSha);
     const ancestors = await commitsList(repoDir, opts.newSha, 9);
     commits = [head, ...ancestors];
-    const { createBranchAction } = await import('../db/actions.js');
-    createBranchAction(opts.doer, opts.repo, branch);
   } else {
     commits = await git.commitsAfter(repoDir, opts.oldSha, opts.newSha);
   }

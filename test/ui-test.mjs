@@ -282,9 +282,13 @@ async function main() {
     await goto(path, `admin-${key}`);
     check(`admin page renders: ${key}`, !/sign-in/.test(page.url()), page.url());
   }
-  // admin user list shows our UI user
-  await goto('/admin/users');
-  check('admin users list contains ui user', new RegExp(U, 'i').test(await page.content()));
+  // admin user list shows our UI user (id-ordered pages — search page by page)
+  let found = false;
+  for (let p2 = 1; p2 <= 5 && !found; p2++) {
+    await goto(`/admin/users?page=${p2}`);
+    found = new RegExp(U, 'i').test(await page.content());
+  }
+  check('admin users list contains ui user', found);
 
   // ------------------------------------------------ console errors across the run
   section('console health');

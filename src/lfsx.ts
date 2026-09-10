@@ -11,6 +11,40 @@ import { verifyPassword } from './authx/password.js';
 
 const LFS_CONTENT_TYPE = 'application/vnd.git-lfs+json';
 
+// ---------------------------------------------------------------- SSH auth tokens
+// Minted by `git-lfs-authenticate` over SSH; consumed via `Authorization: RemoteAuth <token>`.
+
+export interface LFSTokenPayload {
+  userID: number;
+  repoID: number;
+  expiry: number;
+}
+
+function hmacSign(data: string): string {
+  return crypto.createHmac('sha256', conf.secretKey).update(data).digest('hex');
+}
+
+export function mintLFSToken(userID: number, repoID: number, ttlSeconds = 86400): { token: string; expiresAt: number } {
+  const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const payload = `${userID}.${repoID}.${expiry}`;
+  return { token: `${payload}.${hmacSign(payload)}`, expiresAt: expiry };
+}
+
+export function verifyLFSToken(token: string): LFSTokenPayload | null {
+  const idx = token.lastIndexOf('.');
+  if (idx < 0) return null;
+  const payload = token.slice(0, idx);
+  const sig = token.slice(idx + 1);
+  const expected = hmacSign(payload);
+  const a = Buffer.from(sig, 'hex');
+  const b = Buffer.from(expected, 'hex');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const [userID, repoID, expiry] = payload.split('.');
+  const p: LFSTokenPayload = { userID: Number(userID), repoID: Number(repoID), expiry: Number(expiry) };
+  if (!Number.isFinite(p.expiry) || p.expiry < Date.now() / 1000) return null;
+  return p;
+}
+
 function validOID(oid: string): boolean {
   return /^[a-f0-9]{64}$/.test(oid);
 }
@@ -39,9 +73,15 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
   });
 }
 
-/** gogs LFS authenticate: basic user/pass (2FA users rejected), token as username or password. */
+/** gogs LFS authenticate: RemoteAuth token (from git-lfs-authenticate over SSH),
+ * basic user/pass (2FA users rejected), or token as username or password. */
 async function authenticate(req: http.IncomingMessage): Promise<User | null> {
   const header = String(req.headers.authorization ?? '');
+  if (header.startsWith('RemoteAuth ')) {
+    const payload = verifyLFSToken(header.slice('RemoteAuth '.length).trim());
+    if (payload) return db.getUserByID(payload.userID);
+    return null;
+  }
   if (!header.startsWith('Basic ')) return null;
   const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
   const idx = decoded.indexOf(':');

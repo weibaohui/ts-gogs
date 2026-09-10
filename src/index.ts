@@ -9,18 +9,26 @@ import { db } from './db/db.js';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
   // work directory = repo root (contains templates/, public/, vendored-conf/)
   const workDir = path.resolve(__dirname, '..');
   const customDir = process.env.GOGS_CUSTOM ?? path.join(workDir, 'custom');
   fs.mkdirSync(customDir, { recursive: true });
 
-  conf.load(workDir, customDir, process.env.GOGS_CUSTOM_CONF);
+  // --config=<path> (gogs CLI convention, used by authorized_keys serv entries)
+  const configFlag = argv.find((a) => a.startsWith('--config='));
+  const confOverride = configFlag ? configFlag.slice('--config='.length).replace(/^'|'$/g, '') : process.env.GOGS_CUSTOM_CONF;
+  conf.load(workDir, customDir, confOverride);
 
-  // git delegate hook entrypoint (config must be loaded before dispatch)
-  const argv = process.argv.slice(2);
+  // git delegate hook / ssh serv entrypoints (config must be loaded before dispatch)
   if (argv[0] === 'hook') {
     const { runHook } = await import('./hook.js');
     await runHook(argv[1] ?? '');
+    return;
+  }
+  if (argv[0] === 'serv') {
+    const { runServ } = await import('./serv.js');
+    await runServ(argv[1] ?? '');
     return;
   }
   console.log(`${conf.brandName} ${conf.version} (ts-gogs)`);
@@ -56,6 +64,10 @@ async function main(): Promise<void> {
   if (conf.startSSHServer) {
     const { startSSHServer } = await import('./sshx/server.js');
     startSSHServer();
+  } else if (!conf.disableSSH) {
+    // authorized_keys mode: system sshd handles connections via `serv key-<id>`
+    const { writeAuthorizedKeys } = await import('./routes/sshkey.js');
+    writeAuthorizedKeys();
   }
 
   console.log(`Available on    ${conf.externalURL}`);

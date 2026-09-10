@@ -40,8 +40,10 @@ export function createDelegateHooks(repoPath: string): void {
     if (fs.existsSync(dist)) {
       runner = `${process.execPath} "${dist}"`;
     } else {
-      // NOTE: pass config via env — `tsx` consumes --config as its own flag
-      runner = `GOGS_CUSTOM_CONF='${conf.customConf}' "${srcCli}" "${srcEntry}"`;
+      // NOTE: absolute node + tsx CLI entry (ssh sessions have a minimal PATH);
+      // config passes via env — `tsx` consumes --config as its own flag
+      const tsxCli = path.join(conf.workDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+      runner = `GOGS_CUSTOM_CONF='${conf.customConf}' "${process.execPath}" "${tsxCli}" "${srcEntry}"`;
     }
     return `#!/usr/bin/env bash\n${runner} hook ${name} ${args}\n`;
   };

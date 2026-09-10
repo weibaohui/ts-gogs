@@ -353,6 +353,8 @@ export async function DeleteSSHKey(c: Context): Promise<void> {
   const key = db.getPublicKeyByID(id);
   if (key && (key as any).owner_id === c.UserID()) {
     db.db().prepare('DELETE FROM public_key WHERE id = ?').run(id);
+    const { writeAuthorizedKeys } = await import('./sshkey.js');
+    writeAuthorizedKeys();
   }
   c.Redirect(conf.subpath + '/user/settings/ssh');
 }

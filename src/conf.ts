@@ -43,6 +43,7 @@ export class Conf {
   sshDomain = 'localhost';
   sshPort = 22;
   startSSHServer = false;
+  rewriteAuthorizedKeysAtStart = false;
 
   // [app]
   brandName = 'Gogs';
@@ -248,6 +249,7 @@ export class Conf {
     this.sshDomain = this.get('server', 'SSH_DOMAIN') ?? this.domain;
     this.sshPort = toInt(this.get('server', 'SSH_PORT'), 22);
     this.startSSHServer = toBool(this.get('server', 'START_SSH_SERVER'), false);
+    this.rewriteAuthorizedKeysAtStart = toBool(this.get('server', 'REWRITE_AUTHORIZED_KEYS_AT_START'), false);
 
     this.dbType = (this.get('database', 'TYPE') ?? 'sqlite3').toLowerCase();
     this.dbPath = this.ensureAbs(this.get('database', 'PATH') ?? 'data/gogs.db');

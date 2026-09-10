@@ -1196,16 +1196,29 @@ export async function InitializeLabels(c: Context): Promise<void> {
 
 // ---------------------------------------------------------------- milestones
 
+function milestoneView(m: any): any {
+  const v: any = db.goAlias({ ...m });
+  v.NumOpenIssues = (m.num_issues ?? 0) - (m.num_closed_issues ?? 0);
+  v.NumClosedIssues = m.num_closed_issues ?? 0;
+  v.Completeness = Math.round(((m.num_closed_issues ?? 0) / Math.max(m.num_issues ?? 0, 1)) * 100);
+  v.ClosedDate = m.closed_date_unix ? new Date(m.closed_date_unix * 1000) : null;
+  v.DeadlineString = m.deadline_unix ? new Date(m.deadline_unix * 1000).toISOString().slice(0, 10) : '';
+  v.IsOverDue = !!m.deadline_unix && m.deadline_unix < nowUnix();
+  return v;
+}
+
 export async function Milestones(c: Context): Promise<void> {
   const repo = c.Repo.Repository!;
   c.Data['PageIsMilestones'] = true;
   const state = c.Query('state') === 'closed' ? 1 : 0;
   c.Data['IsShowClosed'] = c.Query('state') === 'closed';
-  const rows = db.listMilestones(repo.id, state).map((m: any) => db.goAlias({ ...m }));
-  for (const m of rows) {
-    m.Completeness = m.deadline_unix === 0 ? 100 : Math.round(((m.num_closed_issues ?? 0) / Math.max(m.num_issues ?? 0, 1)) * 100);
-  }
+  const all = db.listMilestones(repo.id, null);
+  const rows = all
+    .filter((m: any) => !!m.is_closed === (state === 1))
+    .map((m: any) => milestoneView(m));
   c.Data['Milestones'] = rows;
+  c.Data['OpenCount'] = all.filter((m: any) => !m.is_closed).length;
+  c.Data['ClosedCount'] = all.filter((m: any) => m.is_closed).length;
   c.Success('repo/issue/milestones');
 }
 
@@ -1418,7 +1431,7 @@ export async function Wiki(c: Context): Promise<void> {
     return;
   }
   const pages = await wikiPages(wikiDir, branch);
-  c.Data['Pages'] = pages;
+  c.Data['Pages'] = pages.map((p) => ({ Name: p.Name, URL: encodeURIComponent(p.Name) }));
   const commit = await git.commitByPath(wikiDir, ref, pageName + '.md');
   let content = '';
   try {
@@ -1434,8 +1447,11 @@ export async function Wiki(c: Context): Promise<void> {
     return;
   }
   const lastUser = commit ? db.getUserByEmail(commit.committer.email) : null;
-  c.Data['Page'] = { Name: pageName, Commit: commit, User: lastUser };
-  c.Data['Content'] = new SafeHTML(markdown(content, `${repoLink(c)}/wiki/${encodeURIComponent(pageName)}`, repo.ComposeMetas()));
+  const when = commit ? commit.committer.when : new Date(0);
+  c.Data['title'] = new SafeHTML(pageName);
+  c.Data['PageURL'] = encodeURIComponent(pageName);
+  c.Data['Author'] = { Name: when ? commit?.committer.name ?? lastUser?.name ?? pageName : 'unknown', When: when };
+  c.Data['content'] = new SafeHTML(markdown(content, `${repoLink(c)}/wiki/${encodeURIComponent(pageName)}`, repo.ComposeMetas()));
   c.Data['PageIsWiki'] = true;
   c.Data['Title'] = pageName;
   c.Require('HighlightJS');

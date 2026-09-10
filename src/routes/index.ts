@@ -199,14 +199,15 @@ export function registerWebRoutes(m: Router): void {
   m.post('/:username/:reponame/issues/:index/assignee', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.UpdateIssueAssignee);
 
   // ----- Wiki -----
-  m.get('/:username/:reponame/wiki', ignSignIn, repo.RepoAssignment(), repo.MustEnableWiki, repo.Wiki);
-  m.get('/:username/:reponame/wiki/:page', ignSignIn, repo.RepoAssignment(), repo.MustEnableWiki, repo.Wiki);
+  // specific wiki actions MUST be registered before /wiki/:page
   m.get('/:username/:reponame/wiki/_pages', ignSignIn, repo.RepoAssignment(), repo.MustEnableWiki, repo.WikiPages);
   m.get('/:username/:reponame/wiki/_new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.NewWiki);
   m.post('/:username/:reponame/wiki/_new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.NewWikiPost);
   m.get('/:username/:reponame/wiki/:page/_edit', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.EditWiki);
   m.post('/:username/:reponame/wiki/:page/_edit', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.EditWikiPost);
   m.post('/:username/:reponame/wiki/:page/delete', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.DeleteWikiPagePost);
+  m.get('/:username/:reponame/wiki', ignSignIn, repo.RepoAssignment(), repo.MustEnableWiki, repo.Wiki);
+  m.get('/:username/:reponame/wiki/:page', ignSignIn, repo.RepoAssignment(), repo.MustEnableWiki, repo.Wiki);
 
   // ----- Labels / milestones (writer) -----
   m.post('/:username/:reponame/labels/new', reqSignIn, repo.RepoAssignment(), repo.RequireRepoWriter(), repo.NewLabel);

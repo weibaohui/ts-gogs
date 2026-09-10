@@ -28,18 +28,34 @@ export async function Profile(c: Context): Promise<void> {
   c.Data['Title'] = u.DisplayName();
   c.Data['PageIsUserProfile'] = true;
   c.Data['Owner'] = u;
+  c.Data['Orgs'] = db.listUserOrgs(u.id, true);
 
-  // public activity of this user
-  const rows = db
-    .db()
-    .prepare(
-      `SELECT a.* FROM action a JOIN repository r ON r.id = a.repo_id
-       WHERE a.act_user_id = ? AND (r.is_private = 0 OR r.owner_id = ?)
-       ORDER BY a.id DESC LIMIT 20`
-    )
-    .all(u.id, c.UserID()) as any[];
-  c.Data['Feeds'] = rows.map(feedAction);
-  for (const f of c.Data['Feeds'] as any[]) db.goAlias(f);
+  const tab = c.Query('tab');
+  c.Data['TabName'] = tab;
+
+  if (tab === 'activity') {
+    // activity feed: actions by this user, private repos hidden from guests
+    const rows = db
+      .db()
+      .prepare(
+        `SELECT a.* FROM action a JOIN repository r ON r.id = a.repo_id
+         WHERE a.act_user_id = ? AND (r.is_private = 0 OR r.owner_id = ?)
+         ORDER BY a.id DESC LIMIT 20`
+      )
+      .all(u.id, c.UserID()) as any[];
+    c.Data['Feeds'] = rows.map(feedAction);
+    for (const f of c.Data['Feeds'] as any[]) db.goAlias(f);
+    c.Success('user/profile');
+    return;
+  }
+
+  // repositories tab
+  const showPrivate = c.IsLogged && (c.UserID() === u.id || c.User!.is_admin === 1);
+  const repos = db.listReposByOwner(u.id).filter((r) => showPrivate || !r.is_private);
+  c.Data['Repos'] = repos;
+  c.Data['Total'] = repos.length;
+  const page = Math.max(1, c.QueryInt('page'));
+  c.Data['Page'] = newPaginater(repos.length, 15, page, 5);
 
   if (c.IsLogged) {
     c.Data['IsFollowing'] = db.isFollowing(c.UserID(), u.id);

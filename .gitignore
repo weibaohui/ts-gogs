@@ -3,3 +3,5 @@ dist/
 data/
 test-artifacts/
 *.log
+custom/
+git-repo-*

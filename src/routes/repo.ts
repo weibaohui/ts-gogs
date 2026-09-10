@@ -951,6 +951,7 @@ async function buildIssueViewData(c: Context, issue: any): Promise<void> {
   const prRow = issue.is_pull ? (db.db().prepare('SELECT * FROM pull_request WHERE issue_id = ?').get(issue.id) as any) : null;
   // gogs sets title-line data at Data root (view_title.tmpl reads .NumCommits etc.)
   c.Data['NumCommits'] = 0;
+  c.Data['NumFiles'] = 0;
   c.Data['HeadTarget'] = '';
   c.Data['BaseTarget'] = '';
   if (issue.is_pull) {
@@ -958,17 +959,27 @@ async function buildIssueViewData(c: Context, issue: any): Promise<void> {
     if (pr0) {
       const headRepo = (pr0.head_repo_id ? db.getRepoByID(pr0.head_repo_id) : repo) ?? repo;
       const dir = headRepo.RepoPath();
-      let num = 0;
-      try {
-        const out = require('node:child_process').execSync(
-          `git log --pretty=format:%H --end-of-options ${pr0.merge_base}...${pr0.head_branch} --`,
-          { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] }
-        ).toString().trim();
-        num = out ? out.split('\n').length : 0;
-      } catch {}
-      c.Data['NumCommits'] = num;
-      c.Data['HeadTarget'] = `${pr0.head_user_name}:${pr0.head_branch}`;
-      c.Data['BaseTarget'] = `${repo.OwnerName()}:${pr0.base_branch}`;
+      const baseBranch = pr0.base_branch;
+      const headBranch = pr0.head_branch;
+      const headOK = await git.resolveRef(dir, headBranch);
+      const baseOK = baseBranch === repo.default_branch || (await git.resolveRef(repo.RepoPath(), baseBranch));
+      if (!headOK || !baseOK) {
+        // gogs PrepareViewPullInfo broken-state
+        c.Data['IsPullReuqestBroken'] = true;
+        c.Data['HeadTarget'] = headOK ? `${pr0.head_user_name}/${headBranch}` : 'deleted';
+        c.Data['BaseTarget'] = baseOK ? `${repo.OwnerName()}/${baseBranch}` : 'deleted';
+      } else {
+        c.Data['HeadTarget'] = `${pr0.head_user_name}/${headBranch}`;
+        c.Data['BaseTarget'] = `${repo.OwnerName()}/${baseBranch}`;
+        if (pr0.merge_base) {
+          try {
+            const out = await git.gitOK(dir, 'rev-list', '--count', '--end-of-options', `${pr0.merge_base}...${headBranch}`, '--');
+            c.Data['NumCommits'] = out ? Number(out.toString().trim()) : 0;
+            const diff = await git.repoDiff(dir, headBranch, pr0.merge_base, conf.maxDiffFiles, conf.maxDiffLines);
+            c.Data['NumFiles'] = diff.numFiles;
+          } catch {}
+        }
+      }
     }
   }
   c.Data['Issue'] = db.goAlias({
@@ -1165,8 +1176,15 @@ export async function UpdateIssueAssignee(c: Context): Promise<void> {
 // ---------------------------------------------------------------- labels
 
 export async function Labels(c: Context): Promise<void> {
+  const repo = c.Repo.Repository!;
   c.Data['PageIsLabels'] = true;
-  c.Data['Labels'] = db.listLabels(c.Repo.Repository!.id).map((l: any) => db.goAlias({ ...labelView(l, false) }));
+  const labels = db.listLabels(repo.id).map((l: any) => {
+    const view = db.goAlias({ ...labelView(l, false) });
+    view.NumOpenIssues = (db.db().prepare('SELECT COUNT(*) AS c FROM issue_label il JOIN issue i ON i.id = il.issue_id WHERE il.label_id = ? AND i.is_closed = 0').get(l.id) as any).c;
+    return view;
+  });
+  c.Data['Labels'] = labels;
+  c.Data['NumLabels'] = labels.length;
   c.Success('repo/issue/labels');
 }
 

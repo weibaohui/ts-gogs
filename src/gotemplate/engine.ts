@@ -1107,7 +1107,8 @@ export function isTrue(v: any): boolean {
 // ---------------------------------------------------------------- printing
 
 function printPlain(v: any): string {
-  if (v == null) return '<no value>';
+  // fmt %v semantics for nested nil (top-level nil in html/template prints '' via printValue)
+  if (v == null) return '<nil>';
   if (v instanceof SafeHTML) return v.html;
   if (typeof v === 'string' || v instanceof String) return String(v);
   if (typeof v === 'number') return fmtNumber(v);
@@ -1176,7 +1177,8 @@ function goQueryEscape(s: string): string {
 }
 
 function printValue(v: any, st: RenderState): string {
-  if (v == null) return st.inScript > 0 ? 'null' : '<no value>';
+  // html/template semantics: top-level nil renders as '' in HTML context, 'null' in <script>
+  if (v == null) return st.inScript > 0 ? 'null' : '';
   if (v instanceof SafeHTML) return v.html;
   if (typeof v === 'string' || v instanceof String) return st.inScript > 0 ? jsEscape(String(v)) : goEscape(String(v));
   if (typeof v === 'function') return '';

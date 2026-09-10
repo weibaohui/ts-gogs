@@ -12,6 +12,8 @@
 // hex hash，N=16384/r=8/p=1，keylen 32）。users.json 缺失/损坏 → 桥不可用，
 // 回退本库认证，绝不把人锁死在外面。
 import * as fs from 'node:fs';
+import * as dbm from '../db/db.js';
+import { randomSalt } from './password.js';
 import { createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 
 const KEY_LEN = 32;
@@ -69,6 +71,35 @@ function loadUsers(): any[] | null {
 export function umAvailability(): 'ok' | 'missing' | 'disabled' {
   if (!umAuthEnabled()) return 'disabled';
   return loadUsers() ? 'ok' : 'missing';
+}
+
+export function umUserRecord(username: string): any | null {
+  const users = loadUsers();
+  return users ? users.find((u) => u && u.username === username) || null : null;
+}
+
+/**
+ * 账户拉通：UM 用户验证通过后，在本库创建/复用同名账号（UM admin → gogs admin）。
+ * 密码置随机不可用值——凭据永远走 UM 桥验证，本库密码只作占位。
+ */
+export function ensureMappedUser(username: string): any | null {
+  const rec = umUserRecord(username);
+  if (!rec || rec.disabled) return null;
+  const isAdmin = rec.role === 'admin' ? 1 : 0;
+  let user = dbm.getUserByUsername(username);
+  const now = Math.floor(Date.now() / 1000);
+  if (!user) {
+    const salt = randomSalt();
+    const unusable = createHash('sha256').update(randomSalt() + username).digest('hex');
+    dbm.db().prepare(
+      'INSERT INTO user (name, lower_name, email, passwd, salt, type, is_admin, created_unix, updated_unix) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)'
+    ).run(username, username.toLowerCase(), `${username.toLowerCase()}@users.dsh.local`, unusable, salt, isAdmin, now, now);
+    user = dbm.getUserByUsername(username);
+  } else if (isAdmin && user.is_admin !== 1) {
+    dbm.db().prepare('UPDATE user SET is_admin = 1, updated_unix = ? WHERE id = ?').run(now, user.id);
+    user = dbm.getUserByUsername(username);
+  }
+  return user ?? null;
 }
 
 function verifyScrypt(record: any, password: string): boolean {

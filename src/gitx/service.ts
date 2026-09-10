@@ -225,7 +225,8 @@ async function processCommitIssueRefs(repo: db.Repository, commits: git.Commit[]
       const index = Number(m[1]);
       const issue = db.getIssueByIndex(repo.id, index);
       if (!issue || issue.is_closed) continue;
-      const closes = /(^|\s)(close[sd]?|fix(?:e[sd]?)?|resolve[sd]?)[:\s]+#\d+/i.test(commit.message);
+      // upstream matches the keyword anywhere in the message (no word-start anchor)
+      const closes = /(close[sd]?|fix(?:e[sd]?)?|resolve[sd]?)[:\s]+#\d+/i.test(commit.message);
       if (closes) {
         db.updateIssueColumns(issue.id, { is_closed: 1 });
         db.db().prepare('INSERT INTO comment (type, poster_id, issue_id, content, created_unix, updated_unix, commit_sha) VALUES (2,?,?,?,?,?,?)')

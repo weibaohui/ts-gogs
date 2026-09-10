@@ -594,12 +594,10 @@ export function hasAccess(userID: number, repo: Repository): boolean {
 // ---------------------------------------------------------------- orgs & teams
 
 export function listUserOrgs(userID: number, all: boolean): User[] {
+  // upstream GetOrgsByUserID(all=false) exposes only public memberships
   let sql = `SELECT u.* FROM user u JOIN org_user ou ON ou.org_id = u.id WHERE u.type = 1 AND ou.uid = ?`;
   const args: any[] = [userID];
-  if (!all) {
-    sql += ` AND (ou.is_public = 1 OR ? IN (SELECT id FROM user WHERE is_admin = 1) OR u.id IN (SELECT org_id FROM org_user WHERE uid = ?))`;
-    args.push(userID, userID);
-  }
+  if (!all) sql += ` AND ou.is_public = 1`;
   const rows = db().prepare(sql).all(...args) as Row[];
   return (rows as Row[]).map((r) => new User(r));
 }

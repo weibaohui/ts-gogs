@@ -79,6 +79,7 @@ export function payload(r) {
 // ---------------------------------------------------------------- git
 export async function git(args, opts = {}) {
   const { cwd, env, mustSucceed = false } = opts;
+  args = ['-c', 'credential.helper=', ...args];
   try {
     const { stdout, stderr } = await execFileP('git', args, { cwd, env: { ...process.env, ...env }, maxBuffer: 1 << 24 });
     if (mustSucceed) return { ok: true, stdout, stderr };

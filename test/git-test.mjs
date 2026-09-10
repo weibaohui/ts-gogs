@@ -28,9 +28,9 @@ async function main() {
   token = payload(r)?.sha1 || payload(r)?.token;
   check('mint token', !!token, r.text);
   const T = { token };
-  r = await api('POST', '/api/v1/user/repos', { ...T, body: { name: R, private: false, auto_init: true, readme: 'README.md' } });
+  r = await api('POST', '/api/v1/user/repos', { ...T, body: { name: R, private: false, auto_init: true, readme: 'Default' } });
   check('create public repo (auto-init)', [200, 201].includes(r.status), r.text);
-  r = await api('POST', '/api/v1/user/repos', { ...T, body: { name: R2, private: true, auto_init: true, readme: 'r.md' } });
+  r = await api('POST', '/api/v1/user/repos', { ...T, body: { name: R2, private: true, auto_init: true, readme: 'Default' } });
   check('create private repo', [200, 201].includes(r.status), r.text);
 
   const dir = await mkWorkdir('gogs-git-');
@@ -265,16 +265,23 @@ async function main() {
   // branch 'web-del' then delete via the web route (session + csrf)
   await git(['checkout', '-b', 'web-del', 'master'], { cwd: work, env: gitEnv() });
   await git(['push', 'origin', 'web-del'], { cwd: work, env: gitEnv() });
-  // browser-like session
+  // browser-like session (upstream wants JSON, our port form-encoded)
   {
     const res = await fetch(BASE + '/user/sign-in');
     cookie = (res.headers.get('set-cookie') || '').split(';')[0];
   }
-  const loginRes = await fetch(BASE + '/api/web/user/sign-in', {
+  let loginRes = await fetch(BASE + '/api/web/user/sign-in', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
-    body: `username=${U}&password=${encodeURIComponent(PASS)}`,
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ username: U, password: PASS }),
   });
+  if (loginRes.status !== 200) {
+    loginRes = await fetch(BASE + '/api/web/user/sign-in', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
+      body: `username=${U}&password=${encodeURIComponent(PASS)}`,
+    });
+  }
   cookie = [cookie, ...((loginRes.headers.get('set-cookie') || '').match(/[^ ]+?=[^;]*;/g) || []).map((c) => c.trim().replace(/;$/, ''))].filter(Boolean).join('; ');
   check('web session login', loginRes.status === 200, loginRes.status);
   // upstream DeleteBranchPost: JS-driven POST, no csrf form field; commit/redirect_to in query
@@ -337,7 +344,8 @@ async function main() {
   check('create PR from branch (redirect to /pulls/N)', [302, 303].includes(prRes.status) && /pulls\/\d+$/.test(prLoc), prRes.status + ' ' + prLoc);
   const prIndex = Number((prLoc.match(/pulls\/(\d+)$/) || [])[1]);
   if (prIndex) {
-    const mergeRes = await fetch(BASE + `/${U}/${R}/pulls/${prIndex}/merge`, {
+    // upstream reads ?merge_style=create_merge_commit from the query string
+    const mergeRes = await fetch(BASE + `/${U}/${R}/pulls/${prIndex}/merge?merge_style=create_merge_commit`, {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: '',

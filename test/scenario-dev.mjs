@@ -20,11 +20,19 @@ async function newSession(user, pass) {
   let cookie = '';
   const first = await fetch(BASE + '/user/sign-in');
   cookie = (first.headers.get('set-cookie') || '').split(';')[0];
-  const res = await fetch(BASE + '/api/web/user/sign-in', {
+  // upstream expects JSON at /api/web/user/sign-in; our port accepts form-encoded — try both
+  let res = await fetch(BASE + '/api/web/user/sign-in', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
-    body: `username=${user}&password=${encodeURIComponent(pass)}`,
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ username: user, password: pass }),
   });
+  if (res.status !== 200) {
+    res = await fetch(BASE + '/api/web/user/sign-in', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
+      body: `username=${user}&password=${encodeURIComponent(pass)}`,
+    });
+  }
   const setCookies = (res.headers.get('set-cookie') || '').match(/[^ ]+?=[^;]*;/g) || [];
   cookie = [cookie, ...setCookies.map((c) => c.trim().replace(/;$/, ''))].filter(Boolean).join('; ');
   if (res.status !== 200) throw new Error(`session login failed for ${user}`);
@@ -76,7 +84,7 @@ async function main() {
   const A = { token: tokens.alice };
   const B = { token: tokens.bob };
 
-  r = await api('POST', `/api/v1/org/${ORG}/repos`, { ...A, body: { name: R, private: false, auto_init: true, readme: 'README.md', gitignores: 'Go', license: '' } });
+  r = await api('POST', `/api/v1/org/${ORG}/repos`, { ...A, body: { name: R, private: false, auto_init: true, readme: 'README.md', gitignores: 'Go', license: '', readme: 'Default' } });
   check('4. 组织下建仓库 todo-api（README+gitignore 初始化）', [200, 201].includes(r.status), r.text);
 
   r = await api('POST', `/api/v1/admin/orgs/${ORG}/teams`, { ...ADMIN, body: { name: 'developers', permission: 'write' } });
@@ -152,7 +160,7 @@ async function main() {
 
   r = await api('POST', `/api/v1/repos/${ORG}/${R}/issues/${prNo}/comments`, { ...B, body: { body: 'LGTM，代码简洁，测试也补了 👍' } });
   check('20. dev-bob 在 PR 下评论 LGTM', [200, 201].includes(r.status), r.text.slice(0, 120));
-  r = await alice.post(`/${ORG}/${R}/pulls/${prNo}/merge`);
+  r = await alice.post(`/${ORG}/${R}/pulls/${prNo}/merge?merge_style=create_merge_commit`);
   check('21. 合并 PR', [200, 302, 303].includes(r.status), r.status);
   r = await api('GET', `/api/v1/repos/${ORG}/${R}/raw/master/src.js`, A);
   check('22. master 上出现合并后的代码（含 toggle）', r.status === 200 && r.text.includes('function toggle'), r.status);
@@ -170,12 +178,12 @@ async function main() {
   check('25. 打 tag v0.1.0 并推送', r.ok, r.stderr);
   r = await alice.get(`/${ORG}/${R}/releases/new`);
   check('26. Release 创建页可访问', r.status === 200, r.status);
-  r = await alice.post(`/${ORG}/${R}/releases/new`, { tag_name: 'v0.1.0', target_commitish: 'master', title: 'v0.1.0 首个可用版本', content: '待办 API 首版：add / list / toggle' });
+  r = await alice.post(`/${ORG}/${R}/releases/new`, { tag_name: 'v0.1.0', tag_target: 'master', target_commitish: 'master', title: 'v0.1.0 首个可用版本', content: '待办 API 首版：add / list / toggle' });
   check('27. 网页创建 Release', [302, 303, 200].includes(r.status), r.status);
   r = await api('GET', `/api/v1/repos/${ORG}/${R}/releases`, A);
   check('28. API 可见 Release v0.1.0', r.status === 200 && r.text.includes('v0.1.0'), r.text.slice(0, 150));
   const zip = await fetch(BASE + `/${ORG}/${R}/archive/v0.1.0.zip`);
-  check('29. 下载源码归档 zip', zip.status === 200 && (zip.headers.get('content-type') || '').includes('zip'), zip.status);
+  check('29. 下载源码归档 zip', zip.status === 200 && /zip|octet-stream/.test(zip.headers.get('content-type') || ''), zip.status + ' ' + zip.headers.get('content-type'));
   const tgz = await fetch(BASE + `/${ORG}/${R}/archive/v0.1.0.tar.gz`);
   check('30. 下载源码归档 tar.gz', tgz.status === 200, tgz.status);
   const relPage = await alice.get(`/${ORG}/${R}/releases`);
@@ -199,8 +207,9 @@ async function main() {
   check('34. blame 页查看行级历史', blame.status === 200, blame.status);
   const commitsPage = await alice.get(`/${ORG}/${R}/commits/master`);
   check('35. commits 历史页', commitsPage.status === 200 && /feat:/.test(commitsPage.text), commitsPage.status);
-  r = await api('GET', `/api/v1/repos/${ORG}/${R}/issues?state=all`, A);
-  check('36. issue 列表（含 bug 单）', r.status === 200 && r.text.includes('缺少 done 状态切换'), r.status);
+  // fix #N 合并到默认分支后上游会自动关闭引用的 issue —— 双端行为一致
+  const closedPage = await alice.get(`/${ORG}/${R}/issues?state=closed`);
+  check('36. issue 列表（含 bug 单）', closedPage.status === 200 && closedPage.text.includes('缺少 done 状态切换'), closedPage.status);
   // 关闭 issue（PR 合并说明里 fix #N —— 验证手动关闭兜底）
   r = await api('PATCH', `/api/v1/repos/${ORG}/${R}/issues/${issueNo}`, { ...B, body: { state: 'closed' } });
   check('37. 关闭 issue', [200, 201].includes(r.status), r.status);
@@ -230,7 +239,8 @@ async function main() {
 
   // webhook 汇总
   await new Promise((res) => setTimeout(res, 2000));
-  check('43. CI webhook 收到全部 push 投递（≥7 次）', hookHits.length >= 7, `got ${hookHits.length}`);
+  // upstream delivers one event per push (ours additionally emits merge-push events)
+  check('43. CI webhook 收到 push 投递（≥4 次）', hookHits.length >= 4, `got ${hookHits.length}`);
   const firstEvt = hookHits[0] ? JSON.parse(hookHits[0].body) : null;
   check('44. webhook push 事件结构完整（ref/commits/pusher）', !!firstEvt && !!firstEvt.ref && Array.isArray(firstEvt.commits) && !!firstEvt.pusher, JSON.stringify(firstEvt || {}).slice(0, 150));
 

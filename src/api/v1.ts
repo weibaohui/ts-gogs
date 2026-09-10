@@ -1364,7 +1364,7 @@ function registerRepoSubRoutes(
   }));
 
   // archive
-  m.get('/api/v1/repos/:username/:reponame/archive/*', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/archive/\*', repoGroup(async (ctx: APIContext) => {
     const wildcard = ctx.c.Params(':*');
     const isZip = wildcard.endsWith('.zip');
     const isTarGz = wildcard.endsWith('.tar.gz');
@@ -1392,7 +1392,7 @@ function registerRepoSubRoutes(
   }));
 
   // git trees & blobs
-  m.get('/api/v1/repos/:username/:reponame/git/trees/:sha', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/git/trees/:sha', repoGroup(async (ctx: APIContext) => {
     const repo = ctx.repo.Repository!;
     const repoDir = repo.RepoPath();
     const sha = ctx.c.Params(':sha');
@@ -1422,7 +1422,7 @@ function registerRepoSubRoutes(
     });
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/git/blobs/:sha', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/git/blobs/:sha', repoGroup(async (ctx: APIContext) => {
     const repo = ctx.repo.Repository!;
     const repoDir = repo.RepoPath();
     const sha = ctx.c.Params(':sha');
@@ -1440,7 +1440,7 @@ function registerRepoSubRoutes(
     }
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/forks', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/forks', repoGroup(async (ctx: APIContext) => {
     const rows = db.db().prepare('SELECT * FROM repository WHERE fork_id = ?').all(ctx.repo.Repository!.id) as any[];
     const out = rows.map((r) => {
       const fork = new Repository(r);
@@ -1451,7 +1451,7 @@ function registerRepoSubRoutes(
     ctx.c.JSONSuccess(out);
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/tags', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/tags', repoGroup(async (ctx: APIContext) => {
     const repoDir = ctx.repo.Repository!.RepoPath();
     const tags = await git.getTags(repoDir);
     ctx.c.JSONSuccess(
@@ -1472,7 +1472,7 @@ function registerRepoSubRoutes(
     );
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/branches', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/branches', repoGroup(async (ctx: APIContext) => {
     const repoDir = ctx.repo.Repository!.RepoPath();
     const branches = await git.getBranches(repoDir);
     ctx.c.JSONSuccess(
@@ -1482,7 +1482,7 @@ function registerRepoSubRoutes(
       }))
     );
   }));
-  m.get('/api/v1/repos/:username/:reponame/branches/*', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/branches/\*', repoGroup(async (ctx: APIContext) => {
     const repoDir = ctx.repo.Repository!.RepoPath();
     const name = ctx.c.Params(':*');
     const branch = (await git.getBranches(repoDir)).find((b) => b.name === name);
@@ -1493,13 +1493,13 @@ function registerRepoSubRoutes(
     ctx.c.JSONSuccess({ name: branch.name, commit: webhookCommitFromCommit(branch.commit) });
   }));
 
-  m.get('/api/v1/repos/:username/:reponame/commits', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/commits', repoGroup(async (ctx: APIContext) => {
     const repoDir = ctx.repo.Repository!.RepoPath();
     const pageSize = Math.max(1, ctx.c.QueryInt('pageSize') || 30);
     const commits = await git.commitsByPage(repoDir, ctx.repo.Repository!.default_branch || conf.defaultBranch, Math.max(1, ctx.c.QueryInt('page') || 1), pageSize);
     ctx.c.JSONSuccess(commits.map((cm) => commitToAPICommit(ctx, ctx.repo.Repository!, cm, `/api/v1/repos/${ctx.repo.Repository!.FullName()}/commits/${cm.id}`)));
   }));
-  m.get('/api/v1/repos/:username/:reponame/commits/:sha', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/commits/:sha', repoGroup(async (ctx: APIContext) => {
     const sha = ctx.c.Params(':sha');
     if (ctx.c.req.headers.accept?.toString().includes('application/vnd.gogs.sha')) {
       return getReferenceSHAHandler(ctx, sha);
@@ -1512,7 +1512,7 @@ function registerRepoSubRoutes(
     }
     ctx.c.JSONSuccess(commitToAPICommit(ctx, ctx.repo.Repository!, commit, `/api/v1/repos/${ctx.repo.Repository!.FullName()}/commits/${commit.id}`));
   }));
-  m.get('/api/v1/repos/:username/:reponame/commits/*', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/commits/\*', repoGroup(async (ctx: APIContext) => {
     await getReferenceSHAHandler(ctx, ctx.c.Params(':*'));
   }));
 
@@ -1826,10 +1826,10 @@ function registerRepoSubRoutes(
   }));
 
   // labels
-  m.get('/api/v1/repos/:username/:reponame/labels', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/labels', repoGroup(async (ctx: APIContext) => {
     ctx.c.JSONSuccess(db.listLabels(ctx.repo.Repository!.id).map(toIssueLabel));
   }));
-  m.get('/api/v1/repos/:username/:reponame/labels/:id', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/labels/:id', repoGroup(async (ctx: APIContext) => {
     const idParam = ctx.c.Params(':id');
     let label: any;
     if (/^\d+$/.test(idParam) && Number(idParam) > 0) {
@@ -1910,10 +1910,10 @@ function registerRepoSubRoutes(
   }));
 
   // milestones
-  m.get('/api/v1/repos/:username/:reponame/milestones', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/milestones', repoGroup(async (ctx: APIContext) => {
     ctx.c.JSONSuccess(db.listMilestones(ctx.repo.Repository!.id, null).map(toIssueMilestone));
   }));
-  m.get('/api/v1/repos/:username/:reponame/milestones/:id', repoGroupNoToken(async (ctx: APIContext) => {
+  m.get('/api/v1/repos/:username/:reponame/milestones/:id', repoGroup(async (ctx: APIContext) => {
     const m = db.getMilestoneByID(ctx.repo.Repository!.id, ctx.c.ParamsInt64(':id'));
     if (!m) {
       ctx.notFound();

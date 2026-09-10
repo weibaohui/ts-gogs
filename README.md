@@ -53,8 +53,13 @@ node dist/index.js
   always `read_only: true`.
 - Only SQLite is supported by this port (gogs defaults are accepted in app.ini but other
   drivers fail fast).
-- SSH pushes work through the builtin SSH server (`START_SSH_SERVER = true`, port from
-  `SSH_PORT`); the `authorized_keys`-based mode is not implemented.
+- SSH: two modes — builtin server (`START_SSH_SERVER = true`, port from `SSH_PORT`) or
+  the classic `authorized_keys` mode (default): each user key gets a `command="... serv
+  key-<id>"` restriction in the RUN_USER's `~/.ssh/authorized_keys` (marker-scoped,
+  foreign entries preserved).
+- LFS over SSH: `git-lfs-authenticate` mints an HMAC `RemoteAuth` token consumed by the
+  HTTP LFS endpoints, and `git-lfs-transfer` implements the pure SSH transfer protocol
+  (lfs-transfer-1) — both available on either SSH mode.
 - LDAP/PAM login sources can be managed under `/admin/auths` but authenticating against
   them is not implemented in this build (local/Plain accounts always work).
 

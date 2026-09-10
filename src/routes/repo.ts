@@ -27,6 +27,7 @@ const ALPHADASHDOT = /^[a-zA-Z0-9_.-]+$/;
 export async function Create(c: Context): Promise<void> {
   c.Title('repo.create');
   c.Data['PageIsCreate'] = true;
+  c.Data['RequireAutosize'] = true;
   c.Data['Gitignores'] = svc.listVendorTemplates('gitignore');
   c.Data['Licenses'] = svc.listVendorTemplates('license');
   c.Data['Readmes'] = svc.listVendorTemplates('readme');
@@ -62,13 +63,14 @@ async function checkCreateLimit(c: Context, owner: db.User): Promise<boolean> {
 
 export async function CreatePost(c: Context): Promise<void> {
   const form = await c.form();
-  const uid = Number(form.uid ?? c.UserID());
+  const uid = Number(form.user_id ?? form.uid ?? c.UserID());
   const owner = db.getUserByID(uid) ?? c.User!;
   if (!(await checkCreateLimit(c, owner))) {
     c.Redirect(conf.subpath + '/repo/create');
     return;
   }
-  const name = String(form.name ?? '').trim();
+  // the create form posts repo_name (gogs form.RepoName)
+  const name = String(form.repo_name ?? form.name ?? '').trim();
   if (!ALPHADASHDOT.test(name) || name.length > 100) {
     c.RenderWithErr(c.Tr('repo.form.name_not_allowed'), 'repo/create');
     return;
@@ -142,7 +144,7 @@ export async function MigratePost(c: Context): Promise<void> {
   // mirror-only local implementation: regular git clone --mirror
   const form = await c.form();
   const cloneAddr = String(form.clone_addr ?? '').trim();
-  const uid = Number(form.uid ?? c.UserID());
+  const uid = Number(form.user_id ?? form.uid ?? c.UserID());
   const owner = db.getUserByID(uid) ?? c.User!;
   if (!cloneAddr) {
     c.RenderWithErr(c.Tr('form.url_error'), 'repo/migrate');
@@ -205,7 +207,7 @@ export async function ForkPost(c: Context): Promise<void> {
     return;
   }
   const form = await c.form();
-  const uid = Number(form.uid ?? c.UserID());
+  const uid = Number(form.user_id ?? form.uid ?? c.UserID());
   const owner = db.getUserByID(uid) ?? c.User!;
   if (!(await checkCreateLimit(c, owner))) {
     c.Redirect(conf.subpath + `/repo/fork/${baseID}`);
@@ -988,6 +990,7 @@ async function buildIssueViewData(c: Context, issue: any): Promise<void> {
     Created: new Date((issue.created_unix ?? 0) * 1000),
     Updated: new Date((issue.updated_unix ?? 0) * 1000),
     PullRequest: prRow ? db.goAlias({ ...prRow, Merged: prRow.merged_unix ? new Date(prRow.merged_unix * 1000) : null }) : null,
+    Comments: comments,
     Poster: poster,
     Repo: repo,
     RenderedContent: new SafeHTML(markdown(String(issue.content ?? ''), repoLink(c), repo.ComposeMetas())),
@@ -1178,6 +1181,7 @@ export async function UpdateIssueAssignee(c: Context): Promise<void> {
 export async function Labels(c: Context): Promise<void> {
   const repo = c.Repo.Repository!;
   c.Data['PageIsLabels'] = true;
+  c.Data['RequireMinicolors'] = true;
   const labels = db.listLabels(repo.id).map((l: any) => {
     const view = db.goAlias({ ...labelView(l, false) });
     view.NumOpenIssues = (db.db().prepare('SELECT COUNT(*) AS c FROM issue_label il JOIN issue i ON i.id = il.issue_id WHERE il.label_id = ? AND i.is_closed = 0').get(l.id) as any).c;
@@ -1255,6 +1259,7 @@ function milestoneView(m: any): any {
 export async function Milestones(c: Context): Promise<void> {
   const repo = c.Repo.Repository!;
   c.Data['PageIsMilestones'] = true;
+  c.Data['RequireDatetimepicker'] = true;
   const state = c.Query('state') === 'closed' ? 1 : 0;
   c.Data['IsShowClosed'] = c.Query('state') === 'closed';
   const all = db.listMilestones(repo.id, null);
@@ -1267,7 +1272,17 @@ export async function Milestones(c: Context): Promise<void> {
   c.Success('repo/issue/milestones');
 }
 
+const DATE_LANGS: Record<string, string> = {
+  'en-US': 'en', 'zh-CN': 'zh', 'zh-HK': 'zh-TW', 'zh-TW': 'zh-TW', 'de-DE': 'de', 'fr-FR': 'fr',
+  'nl-NL': 'nl', 'lv-LV': 'lv', 'ru-RU': 'ru', 'ja-JP': 'ja', 'es-ES': 'es', 'pt-BR': 'pt-BR',
+  'pl-PL': 'pl', 'bg-BG': 'bg', 'it-IT': 'it', 'fi-FI': 'fi', 'tr-TR': 'tr', 'cs-CZ': 'cs-CZ',
+  'sr-SP': 'sr', 'sv-SE': 'sv', 'ko-KR': 'ko', 'gl-ES': 'gl', 'uk-UA': 'uk', 'en-GB': 'en-GB',
+  'hu-HU': 'hu', 'sk-SK': 'sk', 'id-ID': 'id', 'fa-IR': 'fa', 'vi-VN': 'vi', 'pt-PT': 'pt',
+};
+
 export async function NewMilestone(c: Context): Promise<void> {
+  c.Data['RequireDatetimepicker'] = true;
+  c.Data['DateLang'] = DATE_LANGS[c.lang] ?? 'en';
   c.Data['Title'] = c.Tr('repo.milestones.new');
   c.Data['PageIsMilestones'] = true;
   c.Data['RequireDatetimepicker'] = true;
@@ -1289,7 +1304,7 @@ export async function NewMilestonePost(c: Context): Promise<void> {
     if (!Number.isNaN(parsed.getTime())) deadline = Math.floor(parsed.getTime() / 1000);
   }
   db.db()
-    .prepare('INSERT INTO milestone (repo_id, name, content, deadline_unix, num_issues, num_closed_issues, completeness) VALUES (?,?,?,?,0,0,0)')
+    .prepare('INSERT INTO milestone (repo_id, name, content, deadline_unix, is_closed, num_issues, num_closed_issues, completeness) VALUES (?,?,?,?,0,0,0,0)')
     .run(repo.id, name, String(form.content ?? ''), deadline);
   db.refreshMilestoneCounts(repo.id);
   c.Redirect(repoLink(c) + '/milestones');
@@ -2124,6 +2139,7 @@ export async function RemoveUploadFileFromServer(c: Context): Promise<void> {
 export async function Settings(c: Context): Promise<void> {
   c.Data['PageIsSettings'] = true;
   c.Data['PageIsSettingsOptions'] = true;
+  c.Data['RequireAutosize'] = true;
   c.Data['Repository'] = c.Repo.Repository;
   c.Data['MirrorInterval'] = '';
   c.Success('repo/settings/options');

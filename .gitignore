@@ -1,6 +1,5 @@
 node_modules/
 dist/
 data/
-custom/
+test-artifacts/
 *.log
-.DS_Store

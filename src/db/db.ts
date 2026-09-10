@@ -595,10 +595,12 @@ export function hasAccess(userID: number, repo: Repository): boolean {
 
 export function listUserOrgs(userID: number, all: boolean): User[] {
   let sql = `SELECT u.* FROM user u JOIN org_user ou ON ou.org_id = u.id WHERE u.type = 1 AND ou.uid = ?`;
-  if (!all) sql += ` AND (ou.is_public = 1 OR ? IN (SELECT id FROM user WHERE is_admin = 1) OR u.id IN (SELECT org_id FROM org_user WHERE uid = ?))`;
-  const rows = all
-    ? db().prepare(sql).all(userID) as Row[]
-    : db().prepare(sql + ' AND ou.is_public = 1').all(userID);
+  const args: any[] = [userID];
+  if (!all) {
+    sql += ` AND (ou.is_public = 1 OR ? IN (SELECT id FROM user WHERE is_admin = 1) OR u.id IN (SELECT org_id FROM org_user WHERE uid = ?))`;
+    args.push(userID, userID);
+  }
+  const rows = db().prepare(sql).all(...args) as Row[];
   return (rows as Row[]).map((r) => new User(r));
 }
 
@@ -942,6 +944,9 @@ export function goAlias<T extends Row>(row: T): T {
           const v = (this as any)[key];
           return v ? new Date(v * 1000) : new Date(0);
         },
+        set(unix: number) {
+          (this as any)[key] = unix;
+        },
         enumerable: false,
         configurable: true,
       });
@@ -954,6 +959,9 @@ export function goAlias<T extends Row>(row: T): T {
           get() {
             return (this as T)[key as keyof T];
           },
+          set(v: T[keyof T]) {
+            (this as any)[key] = v;
+          },
           enumerable: false,
           configurable: true,
         });
@@ -964,6 +972,9 @@ export function goAlias<T extends Row>(row: T): T {
         Object.defineProperty(row, exported, {
           get() {
             return (this as T)[key as keyof T];
+          },
+          set(v: T[keyof T]) {
+            (this as any)[key] = v;
           },
           enumerable: false,
           configurable: true,

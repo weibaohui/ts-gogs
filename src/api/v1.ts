@@ -368,7 +368,7 @@ export function registerAPIRoutes(m: Router): void {
   }));
   m.post('/api/v1/markdown/raw', wrap(async (ctx: APIContext) => {
     const raw = (await ctx.c.body()).toString('utf8');
-    ctx.c.PlainText(200, sanitizeHTML(raw));
+    ctx.c.PlainText(200, markdown(raw, conf.subpath + '/', {}));
   }));
 
   // Users
@@ -607,6 +607,8 @@ export function registerAPIRoutes(m: Router): void {
       return;
     }
     db.db().prepare('DELETE FROM public_key WHERE id = ?').run((key as any).id);
+    const { writeAuthorizedKeys } = await import('../routes/sshkey.js');
+    writeAuthorizedKeys();
     ctx.c.NoContent();
   }));
 
@@ -796,8 +798,9 @@ export function registerAPIRoutes(m: Router): void {
   }));
 
   // ----- admin -----
+  // upstream: m.Group("/admin", ..., reqAdmin()) — any auth (basic/token), admin flag required
   const adminWrap = (fn: (ctx: APIContext) => Promise<void> | void) =>
-    reqTokenWrap(async (ctx: APIContext) => {
+    wrap(async (ctx: APIContext) => {
       if (!reqAdmin(ctx)) return;
       await fn(ctx);
     });
@@ -827,7 +830,7 @@ async function listUserIssues(ctx: APIContext): Promise<void> {
 }
 
 async function createRepoHandler(ctx: APIContext, owner: User): Promise<void> {
-  if (owner.type === 1 && ctx.user!.id !== owner.id) {
+  if (owner.type === 1 && !db.isOrgOwner(ctx.user!.id, owner.id)) {
     ctx.errorStatus(422, 'Not allowed to create repository for organization.');
     return;
   }
@@ -877,6 +880,8 @@ async function createPublicKeyHandler(ctx: APIContext, ownerID: number): Promise
   const info = db.db()
     .prepare('INSERT INTO public_key (owner_id, name, fingerprint, content, mode, type, created_unix, updated_unix) VALUES (?,?,?,?,2,1,?,?)')
     .run(ownerID, title, fingerprint, clean, now, now);
+  const { writeAuthorizedKeys } = await import('../routes/sshkey.js');
+  writeAuthorizedKeys();
   ctx.c.JSON(201, {
     id: Number(info.lastInsertRowid),
     key: clean,
@@ -1100,6 +1105,14 @@ function registerRepoSubRoutes(
   m.get('/api/v1/repos/:username/:reponame/hooks', repoAdminGroup(repoGroup, async (ctx: APIContext) => {
     const hooks = db.listWebhooks(ctx.repo.Repository!.id);
     ctx.c.JSONSuccess(hooks.map(toRepositoryHook));
+  }));
+  m.get('/api/v1/repos/:username/:reponame/hooks/:id', repoAdminGroup(repoGroup, async (ctx: APIContext) => {
+    const hook = db.db().prepare('SELECT * FROM webhook WHERE id = ? AND repo_id = ?').get(ctx.c.ParamsInt64(':id'), ctx.repo.Repository!.id) as any;
+    if (!hook) {
+      ctx.notFound();
+      return;
+    }
+    ctx.c.JSONSuccess(toRepositoryHook(hook));
   }));
   m.post('/api/v1/repos/:username/:reponame/hooks', repoAdminGroup(repoGroup, async (ctx: APIContext) => {
     const body = (await ctx.c.form()) as any;
@@ -1650,6 +1663,10 @@ function registerRepoSubRoutes(
 
   m.patch('/api/v1/repos/:username/:reponame/issues/comments/:id', issuesGroup(async (ctx: APIContext) => {
     await editIssueComment(ctx);
+  }));
+
+  m.delete('/api/v1/repos/:username/:reponame/issues/comments/:id', issuesGroup(async (ctx: APIContext) => {
+    await deleteIssueComment(ctx);
   }));
 
   m.get('/api/v1/repos/:username/:reponame/issues/:index', issuesGroup(async (ctx: APIContext) => {

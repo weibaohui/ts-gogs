@@ -822,18 +822,31 @@ function execNode(
 }
 
 function updateScriptContext(st: RenderState, text: string) {
-  // lightweight <script> depth tracking for JS-context escaping
+  // Track JS-context depth. Only scripts WITHOUT a src= attribute enter the
+  // JS context — `<script src="...">{{url}}</script>` is an attribute (URL)
+  // context, and external scripts have no inline body to escape.
   let lower = text.toLowerCase();
-  while (true) {
-    const open = lower.indexOf('<script');
-    const close = lower.indexOf('</script');
+  let i = 0;
+  while (i < lower.length) {
+    const open = lower.indexOf('<script', i);
+    const close = lower.indexOf('</script', i);
     if (open >= 0 && (close < 0 || open < close)) {
-      st.inScript++;
-      lower = lower.slice(open + 7);
-    } else if (close >= 0) {
+      const tagEnd = lower.indexOf('>', open);
+      if (tagEnd < 0) {
+        // tag split across chunks: decide by attribute presence
+        if (!lower.slice(open, open + 200).includes('src=')) st.inScript++;
+        return; // rest of chunk is inside the (possible) tag; stop scanning
+      }
+      if (!lower.slice(open, tagEnd).includes('src=')) st.inScript++;
+      i = tagEnd + 1;
+      continue;
+    }
+    if (close >= 0) {
       st.inScript = Math.max(0, st.inScript - 1);
-      lower = lower.slice(close + 8);
-    } else break;
+      i = close + 8;
+      continue;
+    }
+    break;
   }
 }
 

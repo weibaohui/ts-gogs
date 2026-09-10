@@ -291,6 +291,14 @@ export async function Home(c: Context): Promise<void> {
   const refName = c.Repo.BranchName || repo.default_branch || conf.defaultBranch;
   const treePath = c.Repo.TreePath ?? '';
 
+  // branch/tag stats for the stats bar (both dir and file views)
+  const branches = await git.getBranches(repoDir);
+  const tags = await git.getTags(repoDir);
+  c.Data['Branches'] = branches.map((b) => b.name);
+  c.Data['Tags'] = tags.map((t) => t.name);
+  (repo as any).NumTags = tags.length;
+  c.Data['BranchCount'] = branches.length;
+
   // count commits (root only)
   if (!treePath) {
     const cnt = await git.commitsCount(repoDir, refName);
@@ -307,7 +315,8 @@ export async function Home(c: Context): Promise<void> {
   }
 
   const tree = await git.lsTree(repoDir, commit.id, treePath);
-  if (!tree) {
+  const leafIsBlob = !!treePath && !!tree && tree.entries.length === 1 && tree.entries[0].type === 'blob';
+  if (!tree || leafIsBlob) {
     // not a directory: render file view
     await renderFileView(c, commit, refName, treePath);
     return;
@@ -371,12 +380,6 @@ export async function Home(c: Context): Promise<void> {
     }
   }
 
-  const branches = await git.getBranches(repoDir);
-  const tags = await git.getTags(repoDir);
-  c.Data['Branches'] = branches.map((b) => b.name);
-  c.Data['Tags'] = tags.map((t) => t.name);
-  (repo as any).NumTags = tags.length;
-  c.Data['BranchCount'] = branches.length;
   c.Success('repo/home');
 }
 
@@ -403,6 +406,18 @@ function labelView(l: any, checked = false): any {
   const b = parseInt(hex.slice(4, 6), 16) || 0;
   const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
   return { ...l, ForegroundColor: luminance < 128 ? '#fff' : '#000', IsChecked: checked };
+}
+
+/** gogs highlight.FileNameToHighlightClass equivalent. */
+function highlightClassForFile(name: string): string {
+  const ext = path.extname(name).slice(1).toLowerCase();
+  if (!ext) return '';
+  if (ext === 'txt') return 'nohighlight';
+  return ext;
+}
+
+function isTextFileByName(name: string): boolean {
+  return !['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.pdf', '.mp4', '.webm'].includes(path.extname(name).toLowerCase());
 }
 
 /** git.TreeEntry view with Go-style methods (Name/IsTree/IsSymlink/Size). */
@@ -455,8 +470,27 @@ async function renderFileView(c: Context, commit: git.Commit, refName: string, t
     return;
   }
   const size = await git.entrySize(repoDir, blobSha);
+  const fileName0 = parts[parts.length - 1];
+  c.Data['IsViewFile'] = true;
+  c.Data['Title'] = `${fileName0} - ${repo.FullName()}`;
+  c.Data['FileSize'] = size;
+  c.Data['FileName'] = fileName0;
+  c.Data['HighlightClass'] = highlightClassForFile(fileName0);
+  c.Data['RawFileLink'] = `${repoLink(c)}/raw/${encodeURIComponent(refName)}/${treePath}`;
+  const isWriter = c.Repo.IsWriter() && !repo.is_mirror;
+  if (!isTextFileByName(fileName0)) {
+    c.Data['EditFileTooltip'] = c.Tr('repo.editor.cannot_edit_non_text_files');
+  } else if (isWriter) {
+    c.Data['CanEditFile'] = true;
+    c.Data['EditFileTooltip'] = c.Tr('repo.editor.edit_this_file');
+  } else {
+    c.Data['EditFileTooltip'] = c.Tr('repo.editor.must_be_writer');
+  }
+  c.Data['CanDeleteFile'] = isWriter && isTextFileByName(fileName0);
+  c.Data['DeleteFileTooltip'] = isWriter ? c.Tr('repo.editor.delete_this_file') : c.Tr('repo.editor.must_be_writer');
   if (size > conf.maxDisplayFileSize) {
     c.Data['FileIsLarge'] = true;
+    c.Data['IsFileTooLarge'] = true;
   } else {
     const content = (await git.blobBytes(repoDir, blobSha)).toString('utf8');
     const fileName = parts[parts.length - 1];
@@ -471,9 +505,12 @@ async function renderFileView(c: Context, commit: git.Commit, refName: string, t
       const lines = content.split('\n');
       // strip trailing empty line like gogs
       if (lines.length && lines[lines.length - 1] === '') lines.pop();
-      c.Data['FileContent'] = lines
-        .map((l, i) => `<li class="L${i + 1}" rel="L${i + 1}">${escapeHTML(l) || ' '}</li>`)
-        .join('\n');
+      c.Data['FileContent'] = new SafeHTML(
+        lines.map((l, i) => `<li class="L${i + 1}" rel="L${i + 1}">${escapeHTML(l) || ' '}</li>`).join('\n')
+      );
+      c.Data['LineNums'] = new SafeHTML(
+        lines.map((_, i) => `<span class="ln" id="Ln${i + 1}">${i + 1}</span>`).join('\n')
+      );
       c.Data['IsTextFile'] = true;
       c.Data['NumLines'] = lines.length;
     }
@@ -481,9 +518,8 @@ async function renderFileView(c: Context, commit: git.Commit, refName: string, t
   c.Data['FileSize'] = size;
   c.Data['TreeLink'] = `${repoLink(c)}/src/${encodeURIComponent(refName)}/${treePath}`;
   c.Data['BranchLink'] = `${repoLink(c)}/src/${encodeURIComponent(refName)}`;
-  c.Data['RawFileLink'] = `${repoLink(c)}/raw/${encodeURIComponent(refName)}/${treePath}`;
   c.Require('HighlightJS');
-  c.Success('repo/view_home');
+  c.Success('repo/home');
 }
 
 export async function RefCommits(c: Context): Promise<void> {

@@ -1107,8 +1107,8 @@ export function isTrue(v: any): boolean {
 // ---------------------------------------------------------------- printing
 
 function printPlain(v: any): string {
-  // fmt %v semantics for nested nil (top-level nil in html/template prints '' via printValue)
-  if (v == null) return '<nil>';
+  // 用户拍板：嵌套 nil（容器整体打印时）也渲染空串，偏离 Go fmt 的 '<nil>'
+  if (v == null) return '';
   if (v instanceof SafeHTML) return v.html;
   if (typeof v === 'string' || v instanceof String) return String(v);
   if (typeof v === 'number') return fmtNumber(v);

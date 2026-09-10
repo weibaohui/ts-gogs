@@ -3,7 +3,8 @@
 // Covers: sign-in (bad+good), sign-up, repo create, file browsing, commits/branches/tags,
 // issues (create/comment/close), labels, milestones, wiki (create page), settings pages,
 // admin pages, profile, star/watch, explore search, sign-out.
-import { chromium } from '/Users/mac/projects/rust/nothing-todo-cloud/node_modules/playwright-core/index.mjs';
+// playwright-core drives the system Chrome (set CHROME_PATH if non-standard)
+import { chromium } from 'playwright-core';
 import { BASE, ADMIN, api, check, section, summary, uniq, waitForServer, payload } from './helpers.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 

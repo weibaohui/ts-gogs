@@ -1,5 +1,6 @@
 // ts-gogs entry point.
 import * as fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { conf } from './conf.js';
@@ -19,6 +20,11 @@ async function main(): Promise<void> {
   const configFlag = argv.find((a) => a.startsWith('--config='));
   const confOverride = configFlag ? configFlag.slice('--config='.length).replace(/^'|'$/g, '') : process.env.GOGS_CUSTOM_CONF;
   conf.load(workDir, customDir, confOverride);
+
+  // asset cache-busting version: real commit when serving from a git checkout
+  try {
+    conf.buildCommit = execSync('git rev-parse --short HEAD', { cwd: workDir }).toString().trim();
+  } catch {}
 
   // git delegate hook / ssh serv entrypoints (config must be loaded before dispatch)
   if (argv[0] === 'hook') {

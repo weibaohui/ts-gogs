@@ -156,28 +156,146 @@ export async function Dashboard(c: Context): Promise<void> {
 }
 
 /** /user/issues and /:type(issues|pulls) — issues across repos. */
+/** /issues and /pulls — dashboard issue/PR list across the user's repos (gogs user.Issues). */
 export async function Issues(c: Context): Promise<void> {
-  const isPull = c.Params(':type') === 'pulls';
-  c.Data['Title'] = c.Tr(isPull ? 'pullsyour' : 'issuesyour');
-  c.Data['PageIsDashboard'] = true;
-  c.Data['ViewType'] = isPull ? 'pulls' : 'issues';
+  const isPullList = c.Params(':type') === 'pulls';
+  if (isPullList) {
+    c.Data['Title'] = c.Tr('pull_requests');
+    c.Data['PageIsPulls'] = true;
+  } else {
+    c.Data['Title'] = c.Tr('issues');
+    c.Data['PageIsIssues'] = true;
+  }
+  // gogs getDashboardContextUser for the plain-user case
+  const ctxUser = c.User!;
+  c.Data['ContextUser'] = ctxUser;
+  c.Data['Orgs'] = db.listUserOrgs(c.UserID(), true);
+
+  const sortType = c.Query('sort');
+  const viewType = ['your_repositories', 'assigned', 'created_by'].includes(c.Query('type')) ? c.Query('type') : 'your_repositories';
   const page = Math.max(1, c.QueryInt('page'));
-  const state = c.Query('state') === 'closed' ? 1 : 0;
-  c.Data['IsShowClosed'] = state === 1;
-  const size = conf.issuePagingNum;
-  const where = `i.poster_id = ? AND i.is_pull = ? AND i.is_closed = ?`;
-  const total = (db.db().prepare(`SELECT COUNT(*) AS c FROM issue i WHERE ${where}`).get(c.UserID(), isPull ? 1 : 0, state) as any).c;
+  const repoID = c.QueryInt('repo');
+  const isShowClosed = c.Query('state') === 'closed';
+
+  // repos visible to the user: own + collaborations (gogs GetUserRepositories)
+  const repos: db.Repository[] = [
+    ...db.listReposByOwner(ctxUser.id),
+    ...(db.db().prepare('SELECT r.* FROM repository r JOIN collaboration col ON col.repo_id = r.id WHERE col.user_id = ?').all(ctxUser.id) as any[]),
+  ].map((r) => {
+    const repo = new db.Repository(r);
+    repo.owner = db.getUserByID(repo.owner_id) ?? undefined;
+    return repo;
+  });
+  const userRepoIDs = repos.map((r) => r.id);
+
+  // sidebar repos: only those with a nonzero count for the current state
+  const showRepos = repos.filter((r) => {
+    if (isPullList) {
+      return isShowClosed ? (r.NumClosedPulls ?? 0) > 0 : (r.NumOpenPulls ?? 0) > 0;
+    }
+    return r.AllowsIssues() && (isShowClosed ? (r.NumClosedIssues ?? 0) > 0 : (r.NumOpenIssues ?? 0) > 0);
+  });
+
+  // gogs FilterRepositoryWithIssues — scope to repos that actually have issues
+  let repoScope = userRepoIDs;
+  if (!isPullList) {
+    repoScope = userRepoIDs.filter((id) => (db.db().prepare('SELECT COUNT(*) AS c FROM issue WHERE repo_id = ? AND is_pull = 0').get(id) as any).c > 0);
+  }
+
+  const scopeSQL = repoScope.length ? `i.repo_id IN (${repoScope.map(() => '?').join(',')})` : 'i.repo_id IN (-1)';
+  // gogs GetUserIssueStats countSession
+  const countWith = (closed: number, extraWhere: string, extraArgs: any[], useScope: boolean): number => {
+    let w = 'i.is_closed = ? AND i.is_pull = ?';
+    const a: any[] = [closed, isPullList ? 1 : 0];
+    if (repoID > 0) {
+      w += ' AND i.repo_id = ?';
+      a.push(repoID);
+    } else if (useScope) {
+      w += ` AND ${scopeSQL}`;
+      a.push(...repoScope);
+    }
+    if (extraWhere) {
+      w += ` AND ${extraWhere}`;
+      a.push(...extraArgs);
+    }
+    return (db.db().prepare(`SELECT COUNT(*) AS c FROM issue i WHERE ${w}`).get(...a) as any).c;
+  };
+  const stats: any = {
+    AssignCount: countWith(0, 'i.assignee_id = ?', [ctxUser.id], false),
+    CreateCount: countWith(0, 'i.poster_id = ?', [ctxUser.id], false),
+  };
+  const hasAnyRepo = repoID > 0 || repoScope.length > 0;
+  if (hasAnyRepo) stats.YourReposCount = countWith(0, '', [], true);
+  if (viewType === 'assigned') {
+    stats.OpenCount = countWith(0, 'i.assignee_id = ?', [ctxUser.id], false);
+    stats.ClosedCount = countWith(1, 'i.assignee_id = ?', [ctxUser.id], false);
+  } else if (viewType === 'created_by') {
+    stats.OpenCount = countWith(0, 'i.poster_id = ?', [ctxUser.id], false);
+    stats.ClosedCount = countWith(1, 'i.poster_id = ?', [ctxUser.id], false);
+  } else {
+    stats.OpenCount = hasAnyRepo ? countWith(0, '', [], true) : 0;
+    stats.ClosedCount = hasAnyRepo ? countWith(1, '', [], true) : 0;
+  }
+
+  // issue list per filter mode + sort
+  const where: string[] = ['i.is_pull = ?', 'i.is_closed = ?'];
+  const args: any[] = [isPullList ? 1 : 0, isShowClosed ? 1 : 0];
+  if (repoID > 0) {
+    where.unshift('i.repo_id = ?');
+    args.unshift(repoID);
+  } else if (viewType === 'assigned') {
+    where.push('i.assignee_id = ?');
+    args.push(ctxUser.id);
+  } else if (viewType === 'created_by') {
+    where.push('i.poster_id = ?');
+    args.push(ctxUser.id);
+  } else {
+    where.push(scopeSQL);
+    args.push(...repoScope);
+  }
+  const sortMap: Record<string, string> = {
+    oldest: 'i.created_unix ASC',
+    recentupdate: 'i.updated_unix DESC',
+    leastupdate: 'i.updated_unix ASC',
+    mostcomment: 'i.num_comments DESC',
+    leastcomment: 'i.num_comments ASC',
+  };
   const rows = db
     .db()
-    .prepare(`SELECT i.*, r.name AS repo_name, r.is_private FROM issue i JOIN repository r ON r.id = i.repo_id WHERE ${where} ORDER BY i.updated_unix DESC LIMIT ? OFFSET ?`)
-    .all(c.UserID(), isPull ? 1 : 0, state, size, (page - 1) * size) as any[];
-  const issues = rows.map((r) => {
-    const repo = new db.Repository({ id: r.repo_id, name: r.repo_name });
-    return { ...r, Repo: repo };
+    .prepare(`SELECT i.* FROM issue i WHERE ${where.join(' AND ')} ORDER BY ${sortMap[sortType] ?? 'i.created_unix DESC'} LIMIT ? OFFSET ?`)
+    .all(...args, conf.issuePagingNum, (page - 1) * conf.issuePagingNum) as any[];
+
+  const { labelView } = await import('./repo.js');
+  const items = rows.map((r) => {
+    let repo = repos.find((x) => x.id === r.repo_id);
+    if (!repo) {
+      const row = db.db().prepare('SELECT * FROM repository WHERE id = ?').get(r.repo_id) as any;
+      repo = new db.Repository(row);
+      repo.owner = db.getUserByID(repo.owner_id) ?? undefined;
+    }
+    return db.goAlias({
+      ...r,
+      Title: r.name,
+      Index: r.index,
+      Repo: repo,
+      Poster: db.getUserByID(r.poster_id),
+      Assignee: r.assignee_id ? db.getUserByID(r.assignee_id) : null,
+      Labels: db.listIssueLabels(r.id).map((l: any) => db.goAlias({ ...labelView(l) })),
+      Created: new Date((r.created_unix ?? 0) * 1000),
+      Updated: new Date((r.updated_unix ?? 0) * 1000),
+    });
   });
-  c.Data['Issues'] = issues;
-  c.Data['Total'] = total;
-  c.Data['Page'] = newPaginater(total, size, page, 5);
+
+  const total = isShowClosed ? stats.ClosedCount : stats.OpenCount;
+  c.Data['Issues'] = items;
+  c.Data['Repos'] = showRepos;
+  c.Data['Page'] = newPaginater(total, conf.issuePagingNum, page, 5);
+  c.Data['IssueStats'] = stats;
+  c.Data['ViewType'] = viewType;
+  c.Data['SortType'] = sortType;
+  c.Data['RepoID'] = repoID;
+  c.Data['IsShowClosed'] = isShowClosed;
+  c.Data['State'] = isShowClosed ? 'closed' : 'open';
   c.Success('user/dashboard/issues');
 }
 

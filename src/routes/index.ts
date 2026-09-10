@@ -259,7 +259,7 @@ export function registerWebRoutes(m: Router): void {
   m.get('/:username/:reponame/src/*', ignSignIn, repo.RepoAssignment(), repo.RepoRef(), repo.Home);
   m.get('/:username/:reponame/commits/*', ignSignIn, repo.RepoAssignment(), repo.RefCommits);
   m.get('/:username/:reponame/forks', ignSignIn, repo.RepoAssignment(), repo.Forks);
-  m.get('/:username/:reponame/raw/*', ignSignIn, repo.Raw);
+  m.get('/:username/:reponame/raw/*', ignSignIn, repo.RepoAssignment(), repo.Raw);
   m.get('/:username/:reponame/commit/:sha([a-f0-9]{7,40}).:ext(patch|diff)', ignSignIn, repo.CommitRaw);
   // gogs master serves /commit/<sha> via the React SPA (c.ServeWeb)
   m.get('/:username/:reponame/commit/:sha([a-f0-9]{7,40})', ignSignIn, (c: Context) => { c.ServeWeb(); });

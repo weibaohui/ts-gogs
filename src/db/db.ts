@@ -265,6 +265,12 @@ export class Repository {
   get NumOpenPulls(): number {
     return (this.num_pulls ?? 0) - (this.num_closed_pulls ?? 0);
   }
+  get NumClosedIssues(): number {
+    return this.num_closed_issues ?? 0;
+  }
+  get NumClosedPulls(): number {
+    return this.num_closed_pulls ?? 0;
+  }
   AllowsPulls(): boolean {
     return this.enable_pulls === 1;
   }

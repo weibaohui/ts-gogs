@@ -399,7 +399,7 @@ function countPRCommits(repo: db.Repository, pr: any): number {
 }
 
 /** Label view with Go-style computed fields (ForegroundColor). */
-function labelView(l: any, checked = false): any {
+export function labelView(l: any, checked = false): any {
   const hex = String(l.color ?? '#000000').replace('#', '');
   const r = parseInt(hex.slice(0, 2), 16) || 0;
   const g = parseInt(hex.slice(2, 4), 16) || 0;

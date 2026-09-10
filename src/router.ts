@@ -16,6 +16,14 @@ function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] 
   const paramNames: string[] = [];
   let source: string;
 
+  // macaron-style regex route: leading "/^" (drop the slash and the anchors —
+  // the compiled form already anchors ^/… and tolerates a trailing slash)
+  if (pattern.startsWith('/^')) {
+    const body = pattern.slice(2).replace(/\$$/, '').replace(/^\^/, '');
+    const compiled = compilePattern('/' + body);
+    return compiled;
+  }
+
   if (pattern.startsWith('^')) {
     // Full regex form, e.g. /^:type(issues|pulls)$ — :name(rx) becomes a named
     // capture; bare :name matches [^/]+; other chars literal.

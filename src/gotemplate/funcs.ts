@@ -101,7 +101,7 @@ export function fileSize(s: number): string {
 function avatarLink(email: string): string {
   email = String(email ?? '');
   let url = '';
-  if (!conf.disableGravatar) {
+  if (!conf.disableGravatar && email.includes('@')) {
     url = conf.gravatarSource + md5(email.trim().toLowerCase()) + '?d=identicon';
   }
   if (!url) {

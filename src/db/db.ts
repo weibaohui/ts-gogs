@@ -184,6 +184,9 @@ export class User {
     if (this.use_custom_avatar) {
       return `${conf.subpath}/user/avatars/${this.id}`;
     }
+    if (conf.disableGravatar) {
+      return conf.subpath + '/img/avatar_default.png';
+    }
     return `${conf.subpath}/user/avatar/${this.avatar}`;
   }
   AvatarURL(): string {

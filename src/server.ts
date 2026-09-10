@@ -283,11 +283,38 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   // avatar endpoints
+  // avatar middleware: serve cached → download from gravatar source (once) → default
   const avatarMatch = /^\/user\/avatar\/([0-9a-f]{32})$/.exec(pathname);
   if (avatarMatch) {
-    res.statusCode = 302;
-    res.setHeader('Location', `${conf.gravatarSource}${avatarMatch[1]}?d=identicon`);
-    res.end();
+    const hash = avatarMatch[1];
+    const cached = path.join(conf.avatarUploadPath, hash);
+    const failMark = path.join(conf.avatarUploadPath, hash + '.failed');
+    const defaultPng = path.join(conf.workDir, 'public', 'img', 'avatar_default.png');
+    const serveDefault = () => {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      serveFile(res, defaultPng, false);
+    };
+    if (fs.existsSync(cached)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Content-Type', 'image/png');
+      fs.createReadStream(cached).pipe(res);
+      return;
+    }
+    if (conf.disableGravatar || fs.existsSync(failMark)) {
+      serveDefault();
+      return;
+    }
+    // one-shot gravatar download with short timeout; negative-cached for 24h
+    try {
+      const buf = await downloadAvatar(conf.gravatarSource + hash + '?d=identicon');
+      fs.mkdirSync(conf.avatarUploadPath, { recursive: true });
+      fs.writeFileSync(cached, buf);
+      res.setHeader('Content-Type', 'image/png');
+      res.end(buf);
+    } catch {
+      try { fs.mkdirSync(conf.avatarUploadPath, { recursive: true }); fs.writeFileSync(failMark, ''); } catch {}
+      serveDefault();
+    }
     return;
   }
   const customAvatarMatch = /^\/user\/avatars\/(\d+)$/.exec(pathname);
@@ -337,6 +364,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
   }
 
+  // static assets — served BEFORE routes (macaron.Static ordering; otherwise
+  // /css/gogs.min.css would be captured by /:username/:reponame)
+  if (serveStaticPrefix(req, res, pathname)) return;
+
   // route table
   const match = router.match(req.method ?? 'GET', pathname);
   if (match) {
@@ -346,9 +377,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // static assets
-  if (serveStaticPrefix(req, res, pathname)) return;
-
   // SPA catch-all
   if (req.method === 'GET' || req.method === 'HEAD') {
     serveSPA(c, 200);
@@ -357,6 +385,20 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   res.statusCode = 404;
   res.end();
+}
+
+function downloadAvatar(url: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https:') ? require('node:https') : require('node:http');
+    const req2 = mod.get(url, { timeout: 5000 }, (r: any) => {
+      if (r.statusCode !== 200) { r.resume(); return reject(new Error('status ' + r.statusCode)); }
+      const chunks: Buffer[] = [];
+      r.on('data', (d: Buffer) => chunks.push(d));
+      r.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req2.on('timeout', () => req2.destroy(new Error('timeout')));
+    req2.on('error', reject);
+  });
 }
 
 function cookieValue(req: http.IncomingMessage, name: string): string | undefined {

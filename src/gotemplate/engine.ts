@@ -1138,8 +1138,27 @@ export function goEscape(s: string): string {
     .replace(/"/g, '&#34;');
 }
 
+/** html/template jsEscaper: escape JS-special chars, no added quotes. */
 function jsEscape(s: string): string {
-  return JSON.stringify(s) ?? '""';
+  let out = '';
+  for (const ch of String(s)) {
+    switch (ch) {
+      case '\\': out += '\\\\'; break;
+      case "'": out += "\\'"; break;
+      case '"': out += '\\"'; break;
+      case '<': out += '\\u003C'; break;
+      case '>': out += '\\u003E'; break;
+      case '&': out += '\\u0026'; break;
+      case '=': out += '\\u003D'; break;
+      case '\n': out += '\\n'; break;
+      case '\r': out += '\\r'; break;
+      case '\t': out += '\\t'; break;
+      case '\u2028': out += '\\u2028'; break;
+      case '\u2029': out += '\\u2029'; break;
+      default: out += ch;
+    }
+  }
+  return out;
 }
 
 function goQueryEscape(s: string): string {

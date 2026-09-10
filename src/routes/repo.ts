@@ -484,10 +484,11 @@ async function renderFileView(c: Context, commit: git.Commit, refName: string, t
     c.Data['CanEditFile'] = true;
     c.Data['EditFileTooltip'] = c.Tr('repo.editor.edit_this_file');
   } else {
-    c.Data['EditFileTooltip'] = c.Tr('repo.editor.must_be_writer');
+    c.Data['EditFileTooltip'] = c.Tr('repo.editor.must_have_write_access');
   }
   c.Data['CanDeleteFile'] = isWriter && isTextFileByName(fileName0);
-  c.Data['DeleteFileTooltip'] = isWriter ? c.Tr('repo.editor.delete_this_file') : c.Tr('repo.editor.must_be_writer');
+  c.Data['DeleteFileTooltip'] = isWriter ? c.Tr('repo.editor.delete_this_file') : c.Tr('repo.editor.must_have_write_access');
+  c.Data['TreeName'] = treePath;
   if (size > conf.maxDisplayFileSize) {
     c.Data['FileIsLarge'] = true;
     c.Data['IsFileTooLarge'] = true;

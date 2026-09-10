@@ -117,7 +117,7 @@ function lex(src: string): Piece[] {
 
 type Tok =
   | { t: 'ident'; v: string }
-  | { t: 'field'; v: string } // .a.b.c  (leading dot path; v without leading dot)
+  | { t: 'field'; v: string; adj?: boolean } // .a.b.c  (leading dot path; v without leading dot; adj = dot attached to previous token)
   | { t: 'dot' } // .
   | { t: 'root' } // $
   | { t: 'var'; v: string } // $name
@@ -185,6 +185,7 @@ function tokenize(src: string, line: number): Tok[] {
         i++;
         continue;
       }
+      const fieldStart = i;
       let j = i + 1;
       let path = '';
       while (j < n) {
@@ -207,7 +208,8 @@ function tokenize(src: string, line: number): Tok[] {
         }
         break;
       }
-      toks.push({ t: 'field', v: path });
+      // adjacent = no whitespace before the leading dot (e.g. `$.X`, `$v.X`, `(f).X`)
+      toks.push({ t: 'field', v: path, adj: i > 0 && !/\s/.test(src[i - 1]) });
       i = j;
       continue;
     }
@@ -463,11 +465,12 @@ class Parser {
   }
 
   parseFieldChain(base: Expr): Expr {
-    // after $ / $var / (pipe) there may be .field.chain
-    if (this.peek()?.t === 'field') {
+    // after $ / $var / (pipe) a field token continues the chain ONLY when its
+    // leading dot was attached to the previous token (`$.X`, `$v.X`, `(f).X`);
+    // `... $index .ShortRepoPath` is a separate operand
+    const t = this.peek();
+    if (t?.t === 'field' && (t as any).adj) {
       const f = this.next() as any;
-      // the tokenizer already merges adjacent segments (.a.b) into one token,
-      // so consume exactly one field token — the next one is a new operand
       return { e: 'field', base, path: f.v };
     }
     return base;
@@ -1174,8 +1177,16 @@ export function goSprintf(format: string, args: any[]): string {
       i++;
       continue;
     }
+    // positional form: %[N]<verb> — sets the argument index for this verb only
+    const posMatch = /^%\[(\d+)\]/.exec(format.slice(i));
+    let positional = false;
+    if (posMatch) {
+      argIdx = Number(posMatch[1]) - 1;
+      i += posMatch[0].length;
+      positional = true;
+    }
     // parse verb: %[-+ #0]*[0-9]*(\.[0-9]+)?[bdeEfFgGoOqxXscvU%]
-    let j = i + 1;
+    let j = positional ? i : i + 1;
     let flags = '';
     while (j < format.length && /[-+ #0]/.test(format[j])) {
       flags += format[j];
@@ -1205,7 +1216,8 @@ export function goSprintf(format: string, args: any[]): string {
       i = j + 1;
       continue;
     }
-    const arg = args[argIdx++];
+    const arg = args[argIdx];
+    argIdx = argIdx + 1;
     out += formatVerb(verb, flags, width, prec, arg);
     i = j + 1;
   }

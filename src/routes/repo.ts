@@ -321,7 +321,7 @@ export async function Home(c: Context): Promise<void> {
     }
     const entryView = entryViewOf(entry);
     const latestCommit = await git.commitByPath(repoDir, commit.id, treePath ? `${treePath}/${entry.name}` : entry.name);
-    files.push(db.goAlias({ Entry: entryView, Commit: latestCommit, Submodule: null }));
+    files.push(db.goAlias({ Entry: entryView, Commit: latestCommit ? git.commitView(latestCommit) : null, Submodule: null }));
   }
   // sort: trees first, then by name
   files.sort((a, b) => {
@@ -343,7 +343,7 @@ export async function Home(c: Context): Promise<void> {
 
   // latest commit for the directory
   const latest = (await git.commitsByPage(repoDir, refName, 1, 1, treePath || undefined))[0] ?? commit;
-  c.Data['LatestCommit'] = latest;
+  c.Data['LatestCommit'] = git.commitView(latest);
   const authorUser = db.getUserByEmail(latest.author.email);
   c.Data['LatestCommitUser'] = authorUser ?? {
     id: 0,
@@ -378,6 +378,31 @@ export async function Home(c: Context): Promise<void> {
   (repo as any).NumTags = tags.length;
   c.Data['BranchCount'] = branches.length;
   c.Success('repo/home');
+}
+
+/** Count commits in a PR (merge_base...head) for the title line. */
+function countPRCommits(repo: db.Repository, pr: any): number {
+  try {
+    const headRepo = (pr.head_repo_id ? db.getRepoByID(pr.head_repo_id) : repo) ?? repo;
+    const dir = headRepo.RepoPath();
+    const out = require('node:child_process').execSync(
+      `git log --pretty=format:%H --end-of-options ${pr.merge_base}...${pr.head_branch} --`,
+      { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] }
+    ).toString().trim();
+    return out ? out.split('\n').length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Label view with Go-style computed fields (ForegroundColor). */
+function labelView(l: any, checked = false): any {
+  const hex = String(l.color ?? '#000000').replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16) || 0;
+  const g = parseInt(hex.slice(2, 4), 16) || 0;
+  const b = parseInt(hex.slice(4, 6), 16) || 0;
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+  return { ...l, ForegroundColor: luminance < 128 ? '#fff' : '#000', IsChecked: checked };
 }
 
 /** git.TreeEntry view with Go-style methods (Name/IsTree/IsSymlink/Size). */
@@ -489,7 +514,7 @@ async function CommitsPage(c: Context, ref: string, filePath: string, link: stri
   const withUsers = commits.map((cm) => {
     const author = db.getUserByEmail(cm.author.email);
     const committer = db.getUserByEmail(cm.committer.email);
-    return { ...cm, User: author, CommitterUser: committer };
+    return db.goAlias({ ...git.commitView(cm), User: author, CommitterUser: committer });
   });
   c.Data['Commits'] = withUsers;
   c.Data['Keyword'] = c.Query('q');
@@ -649,6 +674,7 @@ async function branchesPage(c: Context, mode: string): Promise<void> {
   const now = Date.now();
   const items = branches.map((b: any) => db.goAlias({
     ...b,
+    Commit: git.commitView(b.commit),
     User: db.getUserByEmail(b.commit.committer.email),
     IsProtected: false,
     IsActive: now - b.commit.committer.when.getTime() < 30 * 86400000,
@@ -660,7 +686,7 @@ async function branchesPage(c: Context, mode: string): Promise<void> {
   const defName = repo.default_branch || conf.defaultBranch;
   const defBranch = branches.find((b) => b.name === defName) ?? branches[0];
   c.Data['DefaultBranch'] = defBranch
-    ? db.goAlias({ Name: defBranch.name, Commit: defBranch.commit })
+    ? db.goAlias({ Name: defBranch.name, Commit: git.commitView(defBranch.commit) })
     : null;
   console.log('[branches:dbg] branches=%d defName=%s defBranch=%s commit=%s data.DefaultBranch=%j', branches.length, defName, !!defBranch, !!defBranch?.commit, c.Data['DefaultBranch']);
   c.Data['PageIsViewFiles'] = true;
@@ -766,7 +792,7 @@ export async function Issues(c: Context): Promise<void> {
   const { total, issues } = db.listIssues(repo.id, isClosed, page, conf.issuePagingNum);
   const items = issues.map((i: any) => {
     const poster = db.getUserByID(i.poster_id);
-    return db.goAlias({ ...i, Poster: poster });
+    return db.goAlias({ ...i, Title: i.name, Index: i.index, Poster: poster, Created: new Date((i.created_unix ?? 0) * 1000), Updated: new Date((i.updated_unix ?? 0) * 1000) });
   });
   c.Data['Issues'] = items;
   c.Data['IssueStats'] = {
@@ -785,7 +811,9 @@ export async function Pulls(c: Context): Promise<void> {
   c.Data['ViewType'] = 'pulls';
   c.Data['IsShowClosed'] = isClosed === 1;
   const { total, issues } = db.listIssues(repo.id, isClosed, page, conf.issuePagingNum);
-  c.Data['Issues'] = issues.filter((i: any) => i.is_pull).map((i: any) => ({ ...i, Poster: db.getUserByID(i.poster_id) }));
+  c.Data['Issues'] = issues
+    .filter((i: any) => i.is_pull)
+    .map((i: any) => db.goAlias({ ...i, Title: i.name, Index: i.index, Poster: db.getUserByID(i.poster_id), Created: new Date((i.created_unix ?? 0) * 1000), Updated: new Date((i.updated_unix ?? 0) * 1000) }));
   c.Data['IssueStats'] = {
     OpenCount: (db.db().prepare('SELECT COUNT(*) AS c FROM issue WHERE repo_id = ? AND is_closed = 0 AND is_pull = 1').get(repo.id) as any).c,
     ClosedCount: (db.db().prepare('SELECT COUNT(*) AS c FROM issue WHERE repo_id = ? AND is_closed = 1 AND is_pull = 1').get(repo.id) as any).c,
@@ -872,16 +900,43 @@ export async function ViewIssue(c: Context): Promise<void> {
     const rendered = sanitizeHTML(String(cm.content ?? ''));
     return db.goAlias({ ...cm, Poster: user, ShowTag: 0, RenderedContent: new SafeHTML(rendered) });
   });
+  const prRow = issue.is_pull ? (db.db().prepare('SELECT * FROM pull_request WHERE issue_id = ?').get(issue.id) as any) : null;
+  // gogs sets title-line data at Data root (view_title.tmpl reads .NumCommits etc.)
+  c.Data['NumCommits'] = 0;
+  c.Data['HeadTarget'] = '';
+  c.Data['BaseTarget'] = '';
+  if (issue.is_pull) {
+    const pr0 = db.db().prepare('SELECT * FROM pull_request WHERE issue_id = ?').get(issue.id) as any;
+    if (pr0) {
+      const headRepo = (pr0.head_repo_id ? db.getRepoByID(pr0.head_repo_id) : repo) ?? repo;
+      const dir = headRepo.RepoPath();
+      let num = 0;
+      try {
+        const out = require('node:child_process').execSync(
+          `git log --pretty=format:%H --end-of-options ${pr0.merge_base}...${pr0.head_branch} --`,
+          { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] }
+        ).toString().trim();
+        num = out ? out.split('\n').length : 0;
+      } catch {}
+      c.Data['NumCommits'] = num;
+      c.Data['HeadTarget'] = `${pr0.head_user_name}:${pr0.head_branch}`;
+      c.Data['BaseTarget'] = `${repo.OwnerName()}:${pr0.base_branch}`;
+    }
+  }
   c.Data['Issue'] = db.goAlias({
     ...issue,
+    Title: issue.name,
+    Created: new Date((issue.created_unix ?? 0) * 1000),
+    Updated: new Date((issue.updated_unix ?? 0) * 1000),
+    PullRequest: prRow ? db.goAlias({ ...prRow, Merged: prRow.merged_unix ? new Date(prRow.merged_unix * 1000) : null }) : null,
     Poster: poster,
     Repo: repo,
     RenderedContent: new SafeHTML(markdown(String(issue.content ?? ''), repoLink(c), repo.ComposeMetas())),
     HashTag: 'issue-' + issue.id,
   });
   c.Data['Comments'] = comments;
-  c.Data['Labels'] = db.listIssueLabels(issue.id).map((l: any) => db.goAlias({ ...l, IsChecked: true }));
-  c.Data['AllLabels'] = db.listLabels(repo.id).map((l: any) => db.goAlias({ ...l, IsChecked: false }));
+  c.Data['Labels'] = db.listIssueLabels(issue.id).map((l: any) => db.goAlias({ ...labelView(l) }));
+  c.Data['AllLabels'] = db.listLabels(repo.id).map((l: any) => db.goAlias({ ...labelView(l, false) }));
   if (issue.milestone_id) {
     c.Data['Milestone'] = db.getMilestoneByID(repo.id, issue.milestone_id);
   }
@@ -894,7 +949,7 @@ export async function ViewIssue(c: Context): Promise<void> {
   }
   c.Data['IsIssuePoster'] = issue.poster_id === c.UserID();
   c.Data['IsIssueWriter'] = c.Repo.IsWriter();
-  c.Success('repo/issue/view_content');
+  c.Success('repo/issue/view');
 }
 
 export async function UpdateIssueTitle(c: Context): Promise<void> {
@@ -1040,7 +1095,7 @@ export async function UpdateIssueAssignee(c: Context): Promise<void> {
 
 export async function Labels(c: Context): Promise<void> {
   c.Data['PageIsLabels'] = true;
-  c.Data['Labels'] = db.listLabels(c.Repo.Repository!.id).map((l: any) => db.goAlias({ ...l, IsChecked: false }));
+  c.Data['Labels'] = db.listLabels(c.Repo.Repository!.id).map((l: any) => db.goAlias({ ...labelView(l, false) }));
   c.Success('repo/issue/labels');
 }
 
@@ -1519,7 +1574,7 @@ export async function CompareAndPullRequest(c: Context): Promise<void> {
       for (const sha of shas) {
         try {
           const cm = await git.catFileCommit(headDir, sha);
-          commitList.push({ ...cm, User: db.getUserByEmail(cm.author.email) });
+          commitList.push(db.goAlias({ ...git.commitView(cm), User: db.getUserByEmail(cm.author.email) }));
         } catch {
           // ignore
         }
@@ -1608,7 +1663,7 @@ export async function ViewPullCommits(c: Context): Promise<void> {
     for (const sha of shas) {
       try {
         const cm = await git.catFileCommit(headRepo.RepoPath(), sha);
-        commits.push({ ...cm, User: db.getUserByEmail(cm.author.email) });
+        commits.push(db.goAlias({ ...git.commitView(cm), User: db.getUserByEmail(cm.author.email) }));
       } catch {
         // ignore
       }

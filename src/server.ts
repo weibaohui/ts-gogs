@@ -370,6 +370,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   // route table
   const match = router.match(req.method ?? 'GET', pathname);
+  console.log('[req]', req.method, pathname, match ? '→ ' + match.route.pattern : '→ NO MATCH');
   if (match) {
     c.params = match.params;
     await runChain(match.route.handlers, c);

@@ -116,6 +116,27 @@ function defineGetter(target: any, exported: string, fn: () => any): void {
   });
 }
 
+/** Full Go-style view of a Commit for templates: ID, Author/Committer views,
+ * Summary(), ParentsCount, plus User/CommitterUser slots filled by callers. */
+export function commitView(cm: Commit): any {
+  const v: any = {
+    ID: shaObject(cm.id),
+    id: cm.id,
+    Message: cm.message,
+    message: cm.message,
+    Parents: cm.parents,
+    ParentsCount: cm.parents.length,
+    Author: sigView(cm.author),
+    Committer: sigView(cm.committer),
+    author: cm.author,
+    committer: cm.committer,
+    Summary: () => cm.Summary(),
+    FullMessage: () => cm.message,
+    repoDir: cm.repoDir,
+  };
+  return v;
+}
+
 export interface Commit {
   id: string; // sha
   author: Signature;

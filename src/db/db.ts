@@ -255,6 +255,13 @@ export class Repository {
   get NumOpenIssues(): number {
     return (this.num_issues ?? 0) - (this.num_closed_issues ?? 0);
   }
+  /** gogs Repository.Created / Updated (time.Time views over unix columns) */
+  get Created(): Date {
+    return new Date((this.created_unix ?? 0) * 1000);
+  }
+  get Updated(): Date {
+    return new Date((this.updated_unix ?? 0) * 1000);
+  }
   get NumOpenPulls(): number {
     return (this.num_pulls ?? 0) - (this.num_closed_pulls ?? 0);
   }
@@ -908,8 +915,32 @@ function goExport(key: string): string {
   return capSegment(key);
 }
 
+/** Unix-second columns that templates read as time.Time. */
+const GO_TIME_COLUMNS: Record<string, string> = {
+  created_unix: 'Created',
+  updated_unix: 'Updated',
+  merged_unix: 'Merged',
+  closed_date_unix: 'ClosedDate',
+  deadline_unix: 'Deadline',
+  next_update_unix: 'NextUpdate',
+  updated_unix_created: 'Updated',
+};
+
 export function goAlias<T extends Row>(row: T): T {
   for (const key of Object.keys(row)) {
+    // time columns: expose as Date under their Go time.Time field name
+    if (GO_TIME_COLUMNS[key] && !(GO_TIME_COLUMNS[key] in row)) {
+      const exported = GO_TIME_COLUMNS[key];
+      Object.defineProperty(row, exported, {
+        get() {
+          const v = (this as any)[key];
+          return v ? new Date(v * 1000) : new Date(0);
+        },
+        enumerable: false,
+        configurable: true,
+      });
+      continue;
+    }
     if (key.includes('_')) {
       const exported = goExport(key);
       if (!(exported in row)) {

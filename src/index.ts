@@ -60,6 +60,22 @@ async function main(): Promise<void> {
   db();
   console.log(`Database:       ${conf.dbPath}`);
 
+  // dsh-git-server 插件模式：DSH_BOOTSTRAP_ADMIN=user:pass 且用户库为空 → 播种管理员
+  const bootstrap = process.env.DSH_BOOTSTRAP_ADMIN || '';
+  if (bootstrap.includes(':')) {
+    const count = (db().prepare('SELECT COUNT(*) AS c FROM user WHERE type = 0').get() as any).c;
+    if (count === 0) {
+      const idx = bootstrap.indexOf(':');
+      const name = bootstrap.slice(0, idx) || 'root';
+      const pass = bootstrap.slice(idx + 1);
+      const { randomSalt, encodePassword } = await import('./authx/password.js');
+      const salt = randomSalt();
+      db().prepare('INSERT INTO user (name, lower_name, email, passwd, salt, type, is_admin, created_unix, updated_unix) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)')
+        .run(name, name.toLowerCase(), `${name}@dsh.local`, encodePassword(pass, salt), salt, Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000));
+      console.log(`Bootstrap admin created: ${name}`);
+    }
+  }
+
   const server = await startServer();
 
   // periodic mirror synchronization (gogs InitSyncMirrors)

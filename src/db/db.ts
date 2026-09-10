@@ -496,6 +496,12 @@ export interface CreateRepoOptions {
   mirror?: boolean;
 }
 
+/** dsh 桥用：取第一个管理员（映射 UM 凭据的目标账号）。 */
+export function getFirstAdmin(): User | null {
+  const r = db().prepare('SELECT * FROM user WHERE type = 0 AND is_admin = 1 ORDER BY id LIMIT 1').get() as Row | undefined;
+  return r ? new User(r) : null;
+}
+
 export function updateRepoColumns(id: number, cols: Row): void {
   const keys = Object.keys(cols);
   if (!keys.length) return;

@@ -120,18 +120,35 @@ export async function handleWebAPI(c: Context, subPath: string): Promise<boolean
       const password = String(req.password ?? '');
       const user = db.getUserByUsername(username) ?? db.getUserByEmail(username);
       const { verifyPassword } = await import('./authx/password.js');
-      if (!user || user.type !== 0 || !verifyPassword(password, user.salt, user.passwd)) {
+      let authed = !!(user && user.type === 0 && verifyPassword(password, user.salt, user.passwd));
+      // dsh 桥：本库不中时对 user-management 用户库验证，UM 凭据映射到管理员账号
+      if (!authed) {
+        const um = await import('./authx/um.js');
+        if (um.umAuthEnabled()) {
+          const check = um.umCheck(username, password);
+          if (check.ok) {
+            const asName = process.env.DSH_UM_AS_USER || 'root';
+            const mapped = db.getUserByUsername(asName) ?? db.getFirstAdmin();
+            if (mapped && mapped.type === 0) {
+              completeSignIn(c, mapped);
+              c.JSONSuccess({});
+              return true;
+            }
+          }
+        }
+      }
+      if (!authed) {
         c.JSON(401, errBody(c.Tr('form.username_password_incorrect'), { username: null, password: null }));
         return true;
       }
       const twofactor = await import('./twofactor.js');
-      if (twofactor.isTwoFactorEnabled(user.id)) {
-        c.session.Set('mfaUserID', user.id);
+      if (twofactor.isTwoFactorEnabled(user!.id)) {
+        c.session.Set('mfaUserID', user!.id);
         c.session.Release();
         c.JSONSuccess({ mfa: true });
         return true;
       }
-      completeSignIn(c, user);
+      completeSignIn(c, user!);
       c.JSONSuccess({});
       return true;
     }

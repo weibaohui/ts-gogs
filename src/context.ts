@@ -14,6 +14,7 @@ import * as db from './db/db.js';
 import { User, Repository } from './db/db.js';
 import { getRepoByName, accessMode, AccessMode, hasAccess } from './db/db.js';
 import { basicAuthDecode } from './authx/password.js';
+import * as umBridge from './authx/um.js';
 import { getAccessTokenBySHA1, touchAccessToken } from './db/db.js';
 import { verifyPassword } from './authx/password.js';
 
@@ -489,6 +490,19 @@ export function escapePound(str: string): string {
 
 // ---------------------------------------------------------------- auth
 
+/** dsh 桥运行时：启用状态 + UM 凭据映射到的本库管理员（懒解析，缓存实例）。 */
+let umMappedCache: { name: string; user: User | null } | null = null;
+function umRuntime(): { enabled: boolean; umCheck: (u: string, p: string) => { ok: boolean; reason?: string }; mappedUser: () => User | null } {
+  const enabled = umBridge.umAuthEnabled();
+  const asName = process.env.DSH_UM_AS_USER || 'root';
+  if (!enabled) return { enabled, umCheck: () => ({ ok: false }), mappedUser: () => null };
+  if (!umMappedCache || umMappedCache.name !== asName) {
+    umMappedCache = { name: asName, user: db.getUserByUsername(asName) ?? db.getFirstAdmin() ?? null };
+  }
+  const mapped = umMappedCache.user;
+  return { enabled, umCheck: umBridge.umCheck, mappedUser: () => mapped ?? db.getFirstAdmin() ?? null };
+}
+
 export function authenticateUserByBasic(header: string): { user: User; isBasic: boolean } | null {
   const parts = header.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Basic') return null;
@@ -496,6 +510,15 @@ export function authenticateUserByBasic(header: string): { user: User; isBasic: 
   const user = db.getUserByUsername(uname);
   if (user && verifyPassword(passwd, user.salt, user.passwd)) {
     return { user, isBasic: true };
+  }
+  // dsh 桥：user-management 用户库（见 authx/um.ts）——UM 凭据映射到管理员账号
+  const um = umRuntime();
+  if (um.enabled) {
+    const check = um.umCheck(uname, passwd);
+    if (check.ok) {
+      const mapped = um.mappedUser();
+      if (mapped) return { user: mapped, isBasic: true };
+    }
   }
   // try token in either field
   const token = getAccessTokenBySHA1(uname) ?? getAccessTokenBySHA1(passwd);

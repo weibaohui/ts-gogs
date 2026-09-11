@@ -5,3 +5,6 @@ test-artifacts/
 *.log
 custom/
 git-repo-*
+.DS_Store
+.env
+*.tsbuildinfo
